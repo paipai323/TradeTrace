@@ -13,6 +13,17 @@ def deal(ticket, entry, side, **kw):
 
 
 class ReconstructionTests(unittest.TestCase):
+    def test_exit_sources_and_unknown_reasons_are_preserved(self):
+        for code, label in [(0, 'Desktop terminal closure'), (1, 'Mobile app closure'),
+                            (2, 'Web platform closure'), (3, 'EA / script closure'),
+                            (6, 'Stop out'), (7, 'Rollover'), (8, 'Variation margin'),
+                            (9, 'Instrument split'), (10, 'Corporate action'),
+                            (99, 'Unknown exit reason (code 99)')]:
+            with self.subTest(code=code):
+                trades, _ = closed_positions([deal(1, 0, 0), deal(2, 1, 1, reason=code)])
+                self.assertEqual(trades[0]['reason'], label)
+                self.assertEqual(trades[0]['reason_code'], code)
+
     def test_fresh_verification_detects_changed_net(self):
         rows = [deal(1, 0, 0), deal(2, 1, 1, reason=5, profit=12)]
         b = Bridge()

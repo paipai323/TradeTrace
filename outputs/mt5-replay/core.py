@@ -72,7 +72,11 @@ def closed_positions(deals):
         a, b = ins[0], outs[0]
         result.append(dict(id=str(pid), symbol=a.symbol, side='BUY' if a.type == 0 else 'SELL',
             volume=a.volume, start=a.time_msc, end=b.time_msc, entry=a.price, exit=b.price,
-            reason={4: 'Stop loss', 5: 'Take profit', 6: 'Stop out'}.get(b.reason, 'Other closure'),
+            reason={0: 'Desktop terminal closure', 1: 'Mobile app closure', 2: 'Web platform closure',
+                3: 'EA / script closure', 4: 'Stop loss', 5: 'Take profit', 6: 'Stop out',
+                7: 'Rollover', 8: 'Variation margin', 9: 'Instrument split',
+                10: 'Corporate action'}.get(b.reason, f'Unknown exit reason (code {b.reason})'),
+            reason_code=b.reason,
             net=round(sum(d.profit + d.commission + d.swap + getattr(d, 'fee', 0) for d in rows), 2),
             order=b.order))
     return sorted(result, key=lambda p: p['end'], reverse=True), skipped
