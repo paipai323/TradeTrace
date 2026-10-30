@@ -5,6 +5,47 @@ import ctypes
 import json
 import os
 import subprocess
+import re
+import math
+import time
+from native_history import NativeHistory, objects
+
+
+def recorded_levels(trade, closing_orders, entry_orders, exit_deals):
+    """Recover explicit recorded levels, never substitute an execution price."""
+    result = {}
+    for level in ('sl', 'tp'):
+        result[level] = 0
+        result[level + '_source'] = 'not recorded'
+        for records, source in [(exit_deals, 'exit deal'), (closing_orders, 'closing order')]:
+            for record in records:
+                value = float(getattr(record, level, 0) or 0)
+                if value > 0 and math.isfinite(value):
+                    result[level], result[level + '_source'] = value, source
+                    break
+            if result[level]:
+                break
+        # Brokers may preserve the trigger in an explicit [sl 123.45] / [tp 123.45]
+        # comment even when the Python order SL/TP fields are zero.
+        reason = trade.get('reason_code')
+        if not result[level] and reason == (4 if level == 'sl' else 5):
+            for record in list(exit_deals) + list(closing_orders):
+                comment = getattr(record, 'comment', '') or ''
+                match = re.fullmatch(r'\s*\[' + level + r'\s+([0-9]+(?:\.[0-9]+)?)\]\s*', comment, re.I)
+                if match:
+                    value = float(match[1])
+                    if value > 0 and math.isfinite(value):
+                        result[level], result[level + '_source'] = value, 'broker exit comment'
+                        break
+        if not result[level]:
+            for record in entry_orders:
+                value = float(getattr(record, level, 0) or 0)
+                if value > 0 and math.isfinite(value):
+                    result[level], result[level + '_source'] = value, 'entry order reference'
+                    break
+        if not result[level] and trade.get('reason_code') == (4 if level == 'sl' else 5):
+            result[level + '_source'] = 'trigger confirmed; exact price unavailable'
+    return result
 
 
 def running_terminals():
@@ -78,7 +119,7 @@ def closed_positions(deals):
                 10: 'Corporate action'}.get(b.reason, f'Unknown exit reason (code {b.reason})'),
             reason_code=b.reason,
             net=round(sum(d.profit + d.commission + d.swap + getattr(d, 'fee', 0) for d in rows), 2),
-            order=b.order))
+            order=b.order, entry_order=a.order, exit_ticket=str(b.ticket)))
     return sorted(result, key=lambda p: p['end'], reverse=True), skipped
 
 
@@ -91,6 +132,9 @@ class Bridge:
         self.mt = None
         self.trades = {}
         self.stage = 'terminal'
+        self.native_levels = {}
+        self.direct = None
+        self.direct_synced = 0
 
     def connect(self, path=''):
         self.stage = 'terminal'
@@ -104,6 +148,9 @@ class Bridge:
             self.mt.shutdown()
         self.mt = None
         self.trades = {}
+        self.native_levels = {}
+        self.direct = None
+        self.direct_synced = 0
         ok = mt.initialize(path, timeout=15000)
         if not ok:
             raise ValueError(f'Cannot connect to MT5: {mt.last_error()}. Open MT5 and sign in first.')
@@ -115,13 +162,14 @@ class Bridge:
             raise ValueError('MT5 has no signed-in account.')
         self.mt = mt
         self.account = account.login
+        self.server = account.server
         return dict(currency=account.currency, server=account.server, account=str(account.login), path=path)
 
     def check(self):
         if not self.mt:
             raise ValueError('Connect to MT5 first.')
         info = self.mt.account_info()
-        if info is None or info.login != self.account:
+        if info is None or info.login != self.account or (hasattr(self, 'server') and getattr(info, 'server', self.server) != self.server):
             self.trades = {}
             raise ValueError('MT5 account changed or disconnected. Reconnect and load trades again.')
 
@@ -136,12 +184,16 @@ class Bridge:
         trades, skipped = closed_positions(rows)
         trades = [t for t in trades if start.timestamp()*1000 <= t['end'] < end.timestamp()*1000]
         self.trades = {t['id']: t for t in trades}
+        self.direct_synced = 0
+        self.sync_levels()
         return dict(trades=trades, skipped=skipped)
 
-    def replay(self, pid):
+    def replay(self, pid, context_minutes=60):
         self.stage = 'account'
         self.check()
         self.stage = 'ticks'
+        if context_minutes not in (15, 30, 60, 240):
+            raise ValueError('Choose 15, 30, 60 or 240 minutes of context.')
         if pid not in self.trades:
             raise ValueError('Load trades again and select a position.')
         trade = self.trades[pid].copy()
@@ -150,8 +202,19 @@ class Bridge:
             raise ValueError('This version supports positions lasting up to 7 days.')
         if not mt.symbol_select(trade['symbol'], True):
             raise ValueError('Symbol is unavailable in this terminal.')
-        orders = mt.history_orders_get(ticket=trade['order'])
-        trade.update(sl=orders[0].sl if orders else 0, tp=orders[0].tp if orders else 0)
+        orders = mt.history_orders_get(ticket=trade['order']) or ()
+        entry_orders = ()
+        if trade.get('entry_order'):
+            entry_orders = mt.history_orders_get(ticket=trade['entry_order']) or ()
+        deals = mt.history_deals_get(position=int(pid)) or ()
+        exits = [d for d in deals if d.entry in (1, 3) and d.order == trade['order']]
+        trade.update(recorded_levels(trade, orders, entry_orders, exits))
+        self.sync_levels()
+        native = self.native_levels.get((pid, str(trade['order']), str(trade['end'])))
+        if native:
+            for level in native:
+                trade[level] = native[level]
+                trade[level + '_source'] = 'direct MT5 position history' if native[level] else 'not set at close (direct MT5)'
         points = []
         cursor, end = utc(trade['start']), utc(trade['end'])
         while cursor <= end:
@@ -173,13 +236,84 @@ class Bridge:
         points.sort(key=lambda p: p[0])
         if not points:
             raise ValueError('No historical bid/ask ticks available. Replay cannot be reconstructed from this broker.')
-        warnings = ['SL/TP lines are the closing order窶冱 recorded levels; past modifications cannot be reconstructed. Floating movement is shown in price units, not account currency.']
+        warnings = ['SL/TP lines prefer direct native MT5 position levels, then explicit Python fields, recognized broker trigger comments, or entry-order references. Sources are labeled above. Historical changes cannot be reconstructed, so these are reference lines throughout replay. Floating movement is in price units, not account currency.']
         if points[0][0] - trade['start'] > 5000 or trade['end'] - points[-1][0] > 5000:
             warnings.append('Tick coverage does not reach within 5 seconds of entry or exit.')
         gaps = sum(b[0] - a[0] > 60000 for a, b in zip(points, points[1:]))
         if gaps:
             warnings.append(f'{gaps} gaps over 60 seconds; these may include closed market hours or missing ticks.')
-        return dict(trade=trade, points=points, warnings=warnings, source='Broker historical ticks 窶｢ coverage not guaranteed')
+        context_start = max(0, trade['start'] - context_minutes * 60000)
+        context = []
+        rates = mt.copy_rates_range(trade['symbol'], mt.TIMEFRAME_M1, utc(context_start), utc(trade['start']))
+        if rates is not None:
+            for bar in rates:
+                ms = int(bar['time']) * 1000
+                # Only completed pre-entry candles: never reveal post-entry OHLC.
+                if context_start <= ms and ms + 60000 <= trade['start']:
+                    context.append([ms, float(bar['open']), float(bar['high']), float(bar['low']), float(bar['close'])])
+        context.sort(key=lambda b: b[0])
+        if not context:
+            warnings.append('No completed M1 candles available for the requested pre-entry context.')
+        elif context[0][0] - context_start > 60000:
+            warnings.append('Pre-entry candle coverage starts later than requested; market hours or missing history may explain the gap.')
+        return dict(trade=trade, points=points, context=context, context_start=context_start,
+            warnings=warnings, source='Broker historical ticks + pre-entry M1 candles; coverage not guaranteed')
+
+    def connect_native(self, url, key):
+        self.stage = 'account'
+        self.check()
+        self.stage = 'levels'
+        client = NativeHistory(url, key)
+        client.verify_account(self.account, self.server)
+        self.direct = client
+        self.direct_synced = 0
+        return self.sync_levels(force=True)
+
+    def sync_levels(self, force=False):
+        if not self.direct:
+            return dict(state='setup', message='Connect the built-in MT5 local API for historical SL/TP. No EA, script or export is needed.', levels=[])
+        if not self.trades:
+            return dict(state='connected', message='Direct MT5 API connected. Load trade history to retrieve SL/TP.', levels=[])
+        if force or time.monotonic() - self.direct_synced > 30:
+            try:
+                self.direct.verify_account(self.account, self.server)
+                start = utc(min(t['start'] for t in self.trades.values())) - timedelta(days=1)
+                end = utc(max(t['end'] for t in self.trades.values())) + timedelta(days=1)
+                payload = self.direct.positions(start, end)
+                pending = {}
+                for row in objects(payload):
+                    pid = row.get('position_id', row.get('position', row.get('identifier', row.get('ticket'))))
+                    trade = self.trades.get(str(pid))
+                    if not trade or row.get('symbol') != trade['symbol']:
+                        continue
+                    opening = row.get('price_open', row.get('open_price', row.get('entry_price')))
+                    if opening is None or abs(float(opening) - trade['entry']) > max(1e-7, abs(trade['entry'])*1e-9):
+                        continue
+                    levels = {}
+                    for key, aliases in [('sl', ('sl','stop_loss','stoploss')), ('tp', ('tp','take_profit','takeprofit'))]:
+                        field = next((alias for alias in aliases if alias in row), None)
+                        if field is not None and row[field] is not None:
+                            value = float(row[field])
+                            if not math.isfinite(value) or value < 0:
+                                raise ValueError('MT5 returned an invalid historical level.')
+                            levels[key] = value
+                    if levels:
+                        identity = (str(pid), str(trade['order']), str(trade['end']))
+                        if identity in pending and pending[identity] != levels:
+                            raise ValueError('MT5 returned conflicting position levels. No levels changed.')
+                        pending[identity] = levels
+                if not pending:
+                    raise ValueError('The direct API returned no matching positions with SL/TP fields. This response format needs verification; no levels were invented or changed.')
+                self.native_levels = pending
+                self.direct_synced = time.monotonic()
+            except (ValueError, OSError, TypeError) as error:
+                return dict(state='waiting', message=str(error), levels=[])
+        levels = []
+        for pid, trade in self.trades.items():
+            native = self.native_levels.get((pid, str(trade['order']), str(trade['end'])))
+            if native is not None:
+                levels.append(dict(id=pid, **native))
+        return dict(state='active', levels=levels, message=f'Direct MT5 history: {len(levels)} positions matched. No EA or export.')
 
     def verify(self, pid):
         self.stage = 'account'

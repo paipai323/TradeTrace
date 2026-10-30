@@ -45,3 +45,45 @@ $('verify').onclick = () => task(async () => {
   $('verify-records').replaceChildren(table);
   status(result.matches ? 'Import consistency check passed. Compare the displayed executions with MT5 History.' : 'Trade records changed. Reload history before continuing.');
 });
+
+
+
+let directConnected = false;
+$('connect-native').onclick = () => task(async () => {
+  $('levels-status').textContent = 'Authenticating with the built-in MT5 history API…';
+  const result = await api('connect-native', {url:$('native-url').value.trim(), key:$('native-key').value});
+  $('native-key').value = '';
+  directConnected = true;
+  applyLevels(result);
+});
+let levelsPolling = false;
+function applyLevels(result) {
+  $('levels-status').textContent = result.message;
+  $('levels-status').className = result.state === 'active' ? 'gain' : 'neutral';
+  if (data && data.trade.id !== 'SAMPLE') {
+    const levels = result.levels.find(item => item.id === data.trade.id);
+    if (levels) {
+      for (const key of ['sl', 'tp']) {
+        if (!(key in levels)) continue;
+        data.trade[key] = levels[key];
+        data.trade[key + '_source'] = levels[key] ? 'direct MT5 position history' : 'not set at close (direct MT5)';
+      }
+      render();
+    }
+  }
+}
+async function pollLevels() {
+  $('connect-native').disabled = !connected || busy;
+  if (!connected || !directConnected || busy || levelsPolling) return;
+  const current = generation;
+  levelsPolling = true;
+  try {
+    const result = await api('sync-levels', {});
+    if (current !== generation || !connected) return;
+    if (result.state === 'setup') directConnected = false;
+    applyLevels(result);
+  } catch (error) {
+    $('levels-status').textContent = error.message;
+  } finally { levelsPolling = false; }
+}
+setInterval(pollLevels, 5000);

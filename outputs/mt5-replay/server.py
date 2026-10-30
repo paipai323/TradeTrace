@@ -13,11 +13,11 @@ from core import Bridge, running_terminals
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 token = secrets.token_urlsafe(32)
-VERSION = '0.2.2'
+VERSION = '0.6.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['server.py', 'core.py', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css'])).hexdigest()[:12]
+    ['server.py', 'core.py', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -82,9 +82,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('End date must be on or after start date.')
                 result = bridge.history(start, end)
             elif self.path == '/api/replay':
-                result = bridge.replay(str(body['id']))
+                result = bridge.replay(str(body['id']), body.get('context_minutes', 60))
             elif self.path == '/api/verify':
                 result = bridge.verify(str(body['id']))
+            elif self.path == '/api/connect-native':
+                result = bridge.connect_native(body.get('url', ''), body.get('key', ''))
+            elif self.path == '/api/sync-levels':
+                bridge.check()
+                result = bridge.sync_levels()
             else:
                 return self.send({'error': 'Not found'}, 404)
             self.send(result)

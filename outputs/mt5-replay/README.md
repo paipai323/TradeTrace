@@ -1,43 +1,47 @@
 # MT5 Replay
 
-A private Windows app for replaying closed MT5 positions using historical bid/ask ticks. The Python service binds only to `127.0.0.1`; the interface and chart have no external assets. No trading API is called. Selecting a historical symbol may add it to Market Watch.
+A private, read-only local Windows app to replay closed MT5 trades, with outcomes, net P&L, recorded exit reasons, SL/TP and pre-entry candles.
 
 ## Start
 
-1. Install 64-bit Python 3.10 or newer if needed.
-2. Run **Install.cmd** once (internet required for the official MetaTrader5 connector and its dependencies).
-3. Open MT5 and sign into the account you want to review.
-4. Double-click **Start.cmd** yourself in File Explorer. Your browser opens at http://127.0.0.1:8766. This keeps the connector outside the coding assistant's restricted environment. The connector refuses restricted Windows tokens and requires an already running terminal before calling the MT5 API. The API itself can still launch a process if the terminal exits or cannot be reached during initialization.
-5. Connect, choose an inclusive range of **exit dates in UTC**, and load history. If multiple terminals are installed, enter the full path to the intended `terminal64.exe` before connecting. Verify the displayed account.
-6. Select a position and use Play, Next tick, speed, or the timeline. The synthetic sample works without MT5.
+Run **Install.cmd** once if dependencies are missing. Open MT5 and sign in, then double-click **Start.cmd** in File Explorer. The app opens at http://127.0.0.1:8766. Click **Find running MT5**, select your terminal, connect and load exit dates (UTC).
 
-Close the launcher console or press Ctrl+C to stop the service. To use a different port: `.venv\Scripts\python.exe server.py --port 8766`.
+## Direct SL/TP history (v0.6.0)
 
-## Accuracy and supported positions
+No EA, script, chart attachment, export, import or helper installation is used.
 
-- V1 supports one entry plus one full exit, including manual closure, stop loss, take profit and stop out. Scale-ins, partial closes, reversals, unmatched/open positions and other complex histories are excluded and counted. The exclusion count covers all retrieved history, not only the chosen dates.
-- Exit classification comes from the actual deal reason, not a guess based on price touching a line. The actual entry and exit fill prices are marked separately from the quotes.
-- SL and TP are read from the **closing order** where available. They are reference lines for the full replay, not a reconstruction of trailing stops or earlier amendments. Missing levels are omitted.
-- Buys are valued against bid; sells against ask. Running movement is signed price difference **per unit**, not floating account-currency profit. Final net sums recorded entry and exit profit, commissions, swaps and fees; separate account-level charges may not be linked to the position.
-- Broker tick availability varies. Coverage warnings identify missing boundary coverage and gaps over 60 seconds; gaps can also reflect closed markets. Even an unflagged replay is not a guarantee of a complete tick archive. Missing ticks are never replaced with invented prices or candle paths.
-- Up to 7 days and 500,000 ticks per position. Loading is synchronous; keep the app open while it fetches. No trade data is saved to disk by the app.
-- Account switches require reconnecting and reloading. Use a single browser session at a time; the connector state is shared locally.
+The app uses MT5’s **built-in local MCP server** to request historical positions directly. This is separate from the Python tick connection.
+
+1. In the signed-in MT5 choose **Tools → Options → MCP**. Enable the internal server and copy its address and API key.
+2. In the replay app connect to MT5 as usual. Expand **Direct MT5 history → Connect direct history**, paste the local address and API key, then connect. Keep the key out of chat.
+3. Load history and select a trade. Matched SL/TP values refresh automatically. The key stays in server memory until reconnection/restart and is cleared from the form after successful authentication. It is never saved or logged.
+
+Only local HTTP endpoints at 127.0.0.1 or localhost are accepted; redirects are refused. The client allows only get_trading_account_info, get_trading_history_positions and get_trading_history_orders. No trading tools are invoked. Account and server must match the Python connection before levels are accepted. Position ID, symbol and opening price must match; malformed, conflicting or unsupported responses fail explicitly. Native zero values mean no corresponding level at close. Historical stop amendments cannot be reconstructed.
+
+**Verification status:** authenticated against the running MT5 terminal and verified that direct history supplied both SL and TP for all 13 loaded supported positions. Protocol, account matching, response handling and browser flows also pass automated checks. Unknown response formats fail explicitly instead of inventing levels.
+
+References: [MT5 MCP configuration](https://www.metatrader5.com/en/terminal/help/mcp_and_ai/configuration), [native history capabilities](https://www.metatrader5.com/en/terminal/help/mcp_and_ai/capabilities).
+
+## Replay
+
+Choose 15/30/60/240 minutes of context and select a trade. Completed M1 candles appear before the entry marker; the entry-containing candle is excluded to avoid revealing post-entry OHLC. Playback starts at entry and reveals bid/ask ticks. Buys close against bid, sells against ask. SL/TP lines are labeled with their sources and serve as historical references throughout replay. Missing ticks and context are flagged; no invented prices are substituted.
+
+The list and replay show green WIN, red LOSS or neutral BREAK EVEN based on recorded net profit, including linked commissions/swaps/fees. Running movement is in price units, not floating account currency. Final outcomes remain visible immediately. The exit reason comes from the recorded deal, not a price comparison. Expand the trade verification panel to reread executions and compare tickets, prices and charges with MT5 History.
+
+## Limits and startup
+
+V1 supports one entry plus one full exit, positions lasting up to 7 days and 500,000 ticks. Partial closes, scale-ins, reversals and unmatched/open positions are excluded. Separate account-level charges may not be linked to a position. Broker historical tick/candle coverage varies; warnings do not guarantee archive completeness.
+
+The server listens on 127.0.0.1 only and uses a per-process request token. No external chart services are used. Selecting a symbol can add it to Market Watch. Start.cmd reuses an existing server only when app, version/build and workspace match. Close the old console if a stale version occupies the port; another process is never terminated. Live setup must run outside the coding assistant sandbox. Use a single browser session; reconnect after switching accounts. Stop the console with Ctrl+C.
 
 ## Development
 
-Standard-library HTTP backend and vanilla JavaScript/canvas frontend. Only the live connector requires `requirements.txt`.
+Python standard-library backend; vanilla JavaScript/canvas frontend. Live connection needs the official MetaTrader5 package. The direct native client uses only Python standard-library HTTP/JSON.
 
 ```powershell
 .venv\Scripts\python.exe -m unittest discover -s tests -v
 node --check static/app.js
+node --check static/connection.js
 ```
 
-API references: [historical deals](https://www.mql5.com/en/docs/python_metatrader5/mt5historydealsget_py), [tick ranges](https://www.mql5.com/en/docs/python_metatrader5/mt5copyticksrange_py), [deal properties](https://www.mql5.com/en/docs/constants/tradingconstants/dealproperties).
-
-## Connection and verification (v0.2.0)
-
-Click **Find running MT5**, select the signed-in terminal and connect. The advanced path box overrides the selection; normally leave it empty. The checks distinguish terminal discovery, connector initialization, account login, history and tick availability. Later stages remain waiting until used.
-
-The header shows the app version and build. Running Start.cmd twice opens the existing server only if its app identity, workspace and build match. An older server or unrelated service on the port causes a clear error: close the old replay console and start again. The launcher never terminates another process.
-
-After selecting a real trade, expand **Check this trade against MT5 History** and reread the execution records. It checks cached import values against a fresh MT5 read and displays both executions and linked costs. Compare these with MT5’s History tab to independently confirm entry/exit, timestamps, lots, charges and closure reason. This is import consistency verification, not proof of complete broker tick coverage.
+References: [native deal properties](https://www.mql5.com/en/docs/constants/tradingconstants/dealproperties), [Python deal history](https://www.mql5.com/en/docs/python_metatrader5/mt5historydealsget_py), [historical ticks](https://www.mql5.com/en/docs/python_metatrader5/mt5copyticksrange_py).

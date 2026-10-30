@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch, Mock
 from types import SimpleNamespace as Row
-from core import closed_positions, Bridge
+from core import closed_positions, Bridge, recorded_levels
 
 
 def deal(ticket, entry, side, **kw):
@@ -13,6 +13,43 @@ def deal(ticket, entry, side, **kw):
 
 
 class ReconstructionTests(unittest.TestCase):
+    def test_direct_history_matches_position_without_files_or_helpers(self):
+        b = Bridge()
+        b.account, b.server = 123, 'TestBroker'
+        b.trades = {'77': dict(order=2, end=5000, start=1000, symbol='XAUUSD', entry=3990.788)}
+        b.direct = Mock()
+        b.direct.positions.return_value = {'positions':[dict(position_id=77, symbol='XAUUSD', price_open=3990.788, sl=3985.5, tp=4010)]}
+        result = b.sync_levels(force=True)
+        self.assertEqual(result['state'], 'active')
+        self.assertEqual(result['levels'], [dict(id='77', sl=3985.5, tp=4010)])
+        b.direct.verify_account.assert_called_with(123, 'TestBroker')
+        b.direct.positions.return_value = {'positions':[dict(position_id=77, symbol='XAUUSD', price_open=4000, sl=3980)]}
+        self.assertEqual(b.sync_levels(force=True)['state'], 'waiting')
+
+    def test_broker_comment_recovers_trigger_separately_from_fill(self):
+        trade = dict(reason_code=4, exit=3989.8)
+        levels = recorded_levels(trade, [Row(sl=0, tp=0, comment='')],
+            [Row(sl=3991, tp=4010)], [Row(comment='[sl 3990.500]')])
+        self.assertEqual(levels['sl'], 3990.5)
+        self.assertEqual(levels['sl_source'], 'broker exit comment')
+        self.assertNotEqual(levels['sl'], trade['exit'])
+        self.assertEqual(levels['tp'], 4010)
+
+    def test_missing_or_untrusted_trigger_is_never_inferred_from_fill(self):
+        for reason, comment in [(4, '[sl]'), (4, 'my target [sl 3990]'), (0, '[sl 3990]')]:
+            levels = recorded_levels(dict(reason_code=reason, exit=3989.8), [], [], [Row(comment=comment)])
+            self.assertEqual(levels['sl'], 0)
+        self.assertEqual(recorded_levels(dict(reason_code=4), [], [], [])['sl_source'],
+            'trigger confirmed; exact price unavailable')
+
+    def test_exit_deal_levels_take_precedence_and_tp_comments_work(self):
+        levels = recorded_levels(dict(reason_code=4), [Row(sl=3991)], [],
+            [Row(sl=3990, comment='[sl 3989]')])
+        self.assertEqual(levels['sl'], 3990)
+        self.assertEqual(levels['sl_source'], 'exit deal')
+        self.assertEqual(recorded_levels(dict(reason_code=5), [], [],
+            [Row(comment='[tp 4010.25]')])['tp'], 4010.25)
+
     def test_exit_sources_and_unknown_reasons_are_preserved(self):
         for code, label in [(0, 'Desktop terminal closure'), (1, 'Mobile app closure'),
                             (2, 'Web platform closure'), (3, 'EA / script closure'),
@@ -82,7 +119,8 @@ class ReconstructionTests(unittest.TestCase):
         b.trades = {'77': dict(id='77', symbol='EURUSD', side='SELL', start=1000,
             end=5000, entry=1.1, exit=1.09, order=2)}
         b.mt = Row(account_info=lambda: Row(login=1), symbol_select=lambda *a: True,
-            history_orders_get=lambda **kw: [Row(sl=1.12, tp=1.09)], COPY_TICKS_ALL=0,
+            history_deals_get=lambda **kw: [], history_orders_get=lambda **kw: [Row(sl=1.12, tp=1.09)], COPY_TICKS_ALL=0,
+            TIMEFRAME_M1=1, copy_rates_range=lambda *a: [],
             copy_ticks_range=lambda *a: [Tick(time_msc=500, bid=1.1, ask=1.11),
                 Tick(time_msc=1000, bid=1.1, ask=1.1001),
                 Tick(time_msc=5000, bid=1.0899, ask=1.09),
@@ -94,6 +132,34 @@ class ReconstructionTests(unittest.TestCase):
         b.mt.copy_ticks_range = lambda *a: []
         with self.assertRaisesRegex(ValueError, 'No historical'):
             b.replay('77')
+
+    def test_context_excludes_candle_containing_entry(self):
+        b = Bridge()
+        b.account = 1
+        b.trades = {'77': dict(id='77', symbol='EURUSD', side='BUY', start=150000,
+            end=180000, entry=1.1, exit=1.11, order=2)}
+        b.mt = Row(account_info=lambda: Row(login=1), symbol_select=lambda *a: True,
+            history_deals_get=lambda **kw: [], history_orders_get=lambda **kw: [], COPY_TICKS_ALL=0, TIMEFRAME_M1=1,
+            copy_ticks_range=lambda *a: [dict(time_msc=150000, bid=1.1, ask=1.1001)],
+            copy_rates_range=lambda *a: [dict(time=60, open=1.09, high=1.1, low=1.08, close=1.095),
+                dict(time=120, open=1.095, high=9, low=1, close=8)])
+        report = b.replay('77', 15)
+        self.assertEqual(len(report['context']), 1)
+        self.assertEqual(report['context'][0][0], 60000)
+        self.assertEqual(report['trade']['sl'], 0)
+        b.trades['77']['entry_order'] = 1
+        b.mt.history_orders_get = lambda **kw: [Row(sl=1.08, tp=1.12)] if kw['ticket'] == 1 else [Row(sl=0, tp=0)]
+        fallback = b.replay('77', 15)['trade']
+        self.assertEqual(fallback['sl'], 1.08)
+        self.assertEqual(fallback['tp'], 1.12)
+        self.assertEqual(fallback['sl_source'], 'entry order reference')
+        b.native_levels[('77', '2', '180000')] = dict(sl=1.085, tp=0)
+        native = b.replay('77', 15)['trade']
+        self.assertEqual(native['sl'], 1.085)
+        self.assertEqual(native['sl_source'], 'direct MT5 position history')
+        self.assertEqual(native['tp'], 0)
+        with self.assertRaisesRegex(ValueError, 'Choose'):
+            b.replay('77', 99)
 
 
 if __name__ == '__main__':
