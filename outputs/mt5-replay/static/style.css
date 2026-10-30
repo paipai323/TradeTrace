@@ -13,3 +13,5 @@
 .native-import label{display:block;margin:12px 0}.native-import input{display:block;width:100%;max-width:520px}.native-import button{margin-top:8px}
 
 #connection-settings{flex-basis:100%;font-size:12px;color:#94a5bd}#connection-settings summary{cursor:pointer;color:#b7cbe5}#connection-settings label{display:block;max-width:600px;margin:12px 0}#connection-settings input,#connection-settings select{display:block;width:100%;max-width:600px;margin-top:7px}.native-import p{margin:0}
+
+#quote-time{display:block;margin-top:8px;color:#94a5bd;font-size:10px;line-height:1.5;overflow-wrap:anywhere}#first-quote{font-size:10px;padding:6px;margin-top:8px}#first-quote[hidden]{display:none}

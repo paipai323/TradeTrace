@@ -194,8 +194,8 @@ class Bridge:
         self.stage = 'account'
         self.check()
         self.stage = 'ticks'
-        if context_minutes not in (15, 30, 60, 240):
-            raise ValueError('Choose 15, 30, 60 or 240 minutes of context.')
+        if context_minutes not in (15, 30, 60, 240, 480, 720, 1440, 4320, 10080):
+            raise ValueError('Choose a history period between 15 minutes and 1 week from the menu.')
         if pid not in self.trades:
             raise ValueError('Load trades again and select a position.')
         trade = self.trades[pid].copy()
