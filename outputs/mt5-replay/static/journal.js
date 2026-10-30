@@ -23,6 +23,19 @@ function placeReplay(){
   $('journal-replay').setAttribute('aria-expanded',String(Boolean(inline)));
 }
 function closeInlineReplay(){snapshotReplay();pause();inlineReplay=false;placeReplay();}
+function clearJournalSelection(){
+  closeInlineReplay();journalRequest++;journalPosition=null;journalDirty=false;journalRevision=0;
+  $('journal-form').reset();$('journal-form').hidden=true;$('journal-empty').hidden=false;
+  $('journal-empty').querySelector('h2').textContent='Select a trade from this date.';
+  $('journal-empty').querySelector('p').textContent='Choose a position on the left to open its review and replay.';
+  $('journal-save-status').textContent='';$('journal-replay-status').textContent='';
+  for(const url of journalImageUrls)URL.revokeObjectURL(url);journalImageUrls=[];$('journal-images').replaceChildren();
+  updateReplayActions();
+}
+function changeCalendarScope(change){
+  if(!allowJournalSwitch())return false;
+  clearJournalSelection();change();renderJournal();return true;
+}
 const localZone=Intl.DateTimeFormat().resolvedOptions().timeZone;
 if(!['Asia/Bangkok','UTC'].includes(localZone))$('journal-timezone').append(new Option(localZone,localZone));
 const savedZone=localStorage.getItem('journal-timezone');
@@ -36,6 +49,10 @@ const journalCurrency=()=>journalModel.accounts.find(account=>account.id===journ
 const element=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
 function allowJournalSwitch(){return !journalDirty||confirm('Discard unsaved review changes? Choose Cancel to save them first.');}
 function showJournalView(view){
+  if(view==='calendar'&&journalView!=='calendar'){
+    if(!allowJournalSwitch())return;
+    clearJournalSelection();
+  }
   snapshotReplay();
   journalView=view;
   $('journal-pane').hidden=view==='replay';$('replay-pane').hidden=view!=='replay';$('calendar-panel').hidden=view!=='calendar';
@@ -62,7 +79,7 @@ async function refreshJournal(account){
   for(const row of result.accounts)$('journal-account').append(new Option(`${row.server} · ${row.login} · ${row.currency}`,row.id));
   $('journal-account').value=result.account||'';
   $('journal-context').textContent=result.accounts.length?'Saved locally · '+journalCurrency()+' · supported closed positions synced from MT5. Other accounts are kept separate.':'Connect MT5 to sync trades. Reviews, calendar and screenshots stay available after MT5 closes.';
-  if(changed){closeInlineReplay();journalPosition=null;journalDirty=false;$('journal-form').hidden=true;$('journal-empty').hidden=false;}
+  if(changed)clearJournalSelection();
   renderJournal();updateReplayActions();
 }
 function filteredTrades(){
@@ -107,7 +124,7 @@ function renderCalendar(trades){
     button.append(element('span',String(day),'day-number'));
     if(summary){button.append(element('strong',money(summary.net,'')),element('small',summary.count+(summary.count===1?' trade':' trades')));}
     button.setAttribute('aria-label',key+(summary?`, ${summary.count} trades, ${money(summary.net,journalCurrency())}`:', no trades'));
-    button.onclick=()=>{journalDay=journalDay===key?null:key;renderJournal();};grid.append(button);
+    button.onclick=()=>changeCalendarScope(()=>{journalDay=journalDay===key?null:key;});grid.append(button);
   }
 }
 async function openJournalTrade(position){
@@ -209,9 +226,13 @@ $('journal-replay').onclick=()=>task(async()=>{
 $('journal-account').onchange=async()=>{if(!allowJournalSwitch()){$('journal-account').value=journalModel.account;return;}journalDay=null;try{await refreshJournal($('journal-account').value);}catch(error){status(error.message);}};
 $('journal-refresh').onclick=()=>refreshJournal(journalModel.account).catch(error=>status(error.message));
 for(const name of ['journal-search','journal-filter'])$(name).addEventListener('input',()=>renderJournal());
-$('journal-timezone').onchange=()=>{localStorage.setItem('journal-timezone',$('journal-timezone').value);journalDay=null;renderJournal();};
-function shiftMonth(offset){const [year,month]=journalMonth.split('-').map(Number);journalMonth=new Date(Date.UTC(year,month-1+offset,1)).toISOString().slice(0,7);journalDay=null;renderJournal();}
-$('month-prev').onclick=()=>shiftMonth(-1);$('month-next').onclick=()=>shiftMonth(1);$('month-today').onclick=()=>{journalMonth=journalDate(Date.now()).slice(0,7);journalDay=null;renderJournal();};$('clear-day').onclick=()=>{journalDay=null;renderJournal();};
+let journalTimezone=$('journal-timezone').value;
+$('journal-timezone').onchange=()=>{
+  const next=$('journal-timezone').value;
+  if(!changeCalendarScope(()=>{journalDay=null;localStorage.setItem('journal-timezone',next);journalTimezone=next;}))$('journal-timezone').value=journalTimezone;
+};
+function shiftMonth(offset){changeCalendarScope(()=>{const [year,month]=journalMonth.split('-').map(Number);journalMonth=new Date(Date.UTC(year,month-1+offset,1)).toISOString().slice(0,7);journalDay=null;});}
+$('month-prev').onclick=()=>shiftMonth(-1);$('month-next').onclick=()=>shiftMonth(1);$('month-today').onclick=()=>changeCalendarScope(()=>{journalMonth=journalDate(Date.now()).slice(0,7);journalDay=null;});$('clear-day').onclick=()=>changeCalendarScope(()=>{journalDay=null;});
 $('journal-backup').onclick=async()=>{
   try{
     const response=await fetch('/api/journal/backup',{method:'POST',headers:{'Content-Type':'application/json','X-Replay-Token':document.querySelector('meta[name=replay-token]').content},body:'{}'});
