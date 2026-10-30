@@ -24,6 +24,7 @@ function placeReplay(){
 }
 function closeInlineReplay(){snapshotReplay();pause();inlineReplay=false;placeReplay();}
 function clearJournalSelection(){
+  if($('screenshot-viewer').open)$('screenshot-viewer').close();
   closeInlineReplay();journalRequest++;journalPosition=null;journalDirty=false;journalRevision=0;
   $('journal-form').reset();$('journal-form').hidden=true;$('journal-empty').hidden=false;
   $('journal-empty').querySelector('h2').textContent='Select a trade from this date.';
@@ -65,6 +66,7 @@ for(const view of ['journal','calendar','replay'])$('nav-'+view).onclick=()=>sho
 function updateReplayActions(){
   placeReplay();
   $('journal-replay').disabled=!journalPosition||busy;
+  $('journal-capture-exit').disabled=!journalPosition||busy;
   const account=journalModel.accounts.find(row=>row.id===journalModel.account);
   const snapshot=window.journalChartSnapshot;
   const live=replayMatchesJournal()&&$('chart').getBoundingClientRect().width>0;
@@ -164,13 +166,15 @@ $('journal-form').onsubmit=async event=>{
   finally{journalSaving=false;$('journal-save').disabled=false;}
 };
 async function renderJournalImages(images,account,position){
+  if($('screenshot-viewer').open)$('screenshot-viewer').close();
   for(const url of journalImageUrls)URL.revokeObjectURL(url);journalImageUrls=[];$('journal-images').replaceChildren();
   for(const attachment of images){
     const result=await api('journal/image',{account,id:attachment.id});
     if(account!==journalModel.account||position!==journalPosition)return;
     const bytes=Uint8Array.from(atob(result.data),character=>character.charCodeAt(0)),url=URL.createObjectURL(new Blob([bytes],{type:result.mime}));journalImageUrls.push(url);
     const figure=element('figure'),image=element('img');image.src=url;image.alt=attachment.name;
-    const link=element('a');link.href=url;link.target='_blank';link.rel='noopener';link.append(image);
+    const link=element('button',undefined,'screenshot-thumbnail');link.type='button';link.setAttribute('aria-label','Enlarge '+attachment.name);link.append(image);
+    link.onclick=()=>openScreenshot(url,attachment.name);
     const remove=element('button','Remove');remove.type='button';remove.onclick=async()=>{
       if(!confirm('Remove this screenshot from your journal?'))return;
       try{await api('journal/remove-image',{account,id:attachment.id});figure.remove();}catch(error){status(error.message);}
@@ -193,10 +197,9 @@ $('journal-upload').onchange=async()=>{
   }catch(error){status(error.message);}finally{$('journal-upload').value='';}
 };
 $('journal-capture').onclick=async()=>{try{snapshotReplay();updateReplayActions();if($('journal-capture').disabled)return;const snapshot=window.journalChartSnapshot;await attachJournalImage('Replay chart · '+stamp(snapshot.clock),snapshot.image.split(',')[1]);status('Replay chart saved to this trade.');}catch(error){status(error.message);}};
-$('journal-replay').onclick=()=>task(async()=>{
+async function ensureJournalReplay(){
   const position=journalPosition,sourceAccount=journalModel.account;
-  try {
-  if(inlineReplay&&!$('journal-inline-replay').hidden){closeInlineReplay();return;}
+  if(!position)return false;
   if(!connected){
     $('journal-replay-status').textContent='Connecting to your running MT5…';
     const result=await api('connect-all',{path:$('path').value||$('terminals').value,url:$('native-url').value.trim(),key:$('native-key').value});
@@ -205,16 +208,22 @@ $('journal-replay').onclick=()=>task(async()=>{
     if('key_saved' in result.native)keyState(result.native.key_saved);
     applyLevels(result.native);
     if(directConnected)$('native-key').value='';
-    if(position!==journalPosition||sourceAccount!==journalModel.account)return;
+    if(position!==journalPosition||sourceAccount!==journalModel.account)return false;
   }
   const account=journalModel.accounts.find(row=>row.id===journalModel.account);
   if(!account||account.login!==window.journalConnectedAccount?.account||account.server!==window.journalConnectedAccount?.server)throw Error('Connect MT5 to this journal account to replay its trades.');
   $('journal-replay-status').textContent='Loading historical prices…';
   if(!replayMatchesJournal()){
     const response=await api('replay',{id:position,context_minutes:Number($('context-minutes').value)});
-    if(position!==journalPosition||sourceAccount!==journalModel.account)return;
+    if(position!==journalPosition||sourceAccount!==journalModel.account)return false;
     setData(response);
   }
+  return true;
+}
+$('journal-replay').onclick=()=>task(async()=>{
+  try {
+  if(inlineReplay&&!$('journal-inline-replay').hidden){closeInlineReplay();return;}
+  if(!await ensureJournalReplay())return;
   inlineReplay=true;placeReplay();updateReplayActions();
   $('journal-replay-status').textContent='';
   status('Replay ready below. You can play the trade and write your review on this page.');
@@ -223,6 +232,34 @@ $('journal-replay').onclick=()=>task(async()=>{
     throw error;
   }
 });
+$('journal-capture-exit').onclick=()=>task(async()=>{
+  try {
+    if(!await ensureJournalReplay())return;
+    const chart=document.createElement('canvas');
+    draw({canvas:chart,width:1400,height:520,time:data.trade.end,index:data.points.length-1});
+    const screenshot=document.createElement('canvas');screenshot.width=1400;screenshot.height=630;
+    const ctx=screenshot.getContext('2d'),trade=data.trade;
+    ctx.fillStyle='#0e1725';ctx.fillRect(0,0,1400,630);ctx.fillStyle='#e8eef8';ctx.font='bold 23px Segoe UI';
+    ctx.fillText(`${trade.symbol} / ${trade.side} · Position #${trade.id}`,22,36);
+    ctx.fillStyle=trade.net<0?'#f18d9b':'#70e4c2';ctx.font='bold 21px Segoe UI';ctx.textAlign='right';
+    ctx.fillText(`${outcome(trade.net).label} · ${money(trade.net,trade.currency||currency)}`,1378,36);ctx.textAlign='left';
+    ctx.fillStyle='#94a5bd';ctx.font='13px Segoe UI';ctx.fillText(`EXIT SNAPSHOT · ${stamp(trade.end)} · ${trade.reason} · Fill ${fmt(trade.exit)}`,22,66);
+    ctx.drawImage(chart,0,85);ctx.fillStyle='#94a5bd';ctx.fillText('Recorded historical quotes and execution fill. SL/TP are recorded reference levels; quote coverage may have gaps.',22,618);
+    await attachJournalImage('Exit replay chart · '+stamp(trade.end),screenshot.toDataURL('image/png').split(',')[1]);
+    $('journal-replay-status').textContent='Exit chart saved. Your replay position has not changed.';
+    status('Exit replay chart saved to this trade.');
+  }catch(error){$('journal-replay-status').textContent=error.message;throw error;}
+});
+function openScreenshot(url,name){
+  $('screenshot-title').textContent=name;$('screenshot-full').src=url;$('screenshot-full').alt=name;
+  $('screenshot-viewport').classList.remove('actual-size');$('screenshot-zoom').textContent='Actual size';
+  $('screenshot-viewer').showModal();
+}
+function toggleScreenshotZoom(){const zoomed=$('screenshot-viewport').classList.toggle('actual-size');$('screenshot-zoom').textContent=zoomed?'Fit to window':'Actual size';}
+$('screenshot-zoom').onclick=toggleScreenshotZoom;$('screenshot-full').onclick=toggleScreenshotZoom;
+$('screenshot-close').onclick=()=>$('screenshot-viewer').close();
+$('screenshot-viewer').addEventListener('click',event=>{if(event.target===$('screenshot-viewer')){const rect=$('screenshot-viewer').getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)$('screenshot-viewer').close();}});
+$('screenshot-viewer').addEventListener('close',()=>{$('screenshot-full').removeAttribute('src');});
 $('journal-account').onchange=async()=>{if(!allowJournalSwitch()){$('journal-account').value=journalModel.account;return;}journalDay=null;try{await refreshJournal($('journal-account').value);}catch(error){status(error.message);}};
 $('journal-refresh').onclick=()=>refreshJournal(journalModel.account).catch(error=>status(error.message));
 for(const name of ['journal-search','journal-filter'])$(name).addEventListener('input',()=>renderJournal());
