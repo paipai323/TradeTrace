@@ -14,7 +14,7 @@ from core import Bridge, running_terminals
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 token = secrets.token_urlsafe(32)
-VERSION = '1.0.0'
+VERSION = '1.1.1'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
