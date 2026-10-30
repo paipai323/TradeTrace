@@ -10,6 +10,7 @@ import math
 import time
 from native_history import NativeHistory, objects
 from credentials import KeyStore
+from journal import Journal
 
 
 def recorded_levels(trade, closing_orders, entry_orders, exit_deals):
@@ -137,6 +138,8 @@ class Bridge:
         self.direct = None
         self.direct_synced = 0
         self.key_store = KeyStore()
+        self.journal = Journal()
+        self.journal_account = None
 
     def connect(self, path=''):
         self.stage = 'terminal'
@@ -188,6 +191,11 @@ class Bridge:
         self.trades = {t['id']: t for t in trades}
         self.direct_synced = 0
         self.sync_levels()
+        for trade in trades:
+            native = self.native_levels.get((trade['id'], str(trade['order']), str(trade['end'])))
+            if native:
+                trade.update(native)
+        self.journal_account = self.journal.sync(self.account, self.server, self.mt.account_info().currency, trades)
         return dict(trades=trades, skipped=skipped)
 
     def replay(self, pid, context_minutes=60):
@@ -197,7 +205,15 @@ class Bridge:
         if context_minutes not in (15, 30, 60, 240, 480, 720, 1440, 4320, 10080):
             raise ValueError('Choose a history period between 15 minutes and 1 week from the menu.')
         if pid not in self.trades:
-            raise ValueError('Load trades again and select a position.')
+            if not pid.isdigit():
+                raise ValueError('Invalid position ID.')
+            rows = self.mt.history_deals_get(position=int(pid))
+            positions, _ = closed_positions(rows or ())
+            selected = next((position for position in positions if position['id'] == pid), None)
+            if selected is None:
+                raise ValueError('This saved position is not available in the connected account history.')
+            self.trades[pid] = selected
+            self.direct_synced = 0
         trade = self.trades[pid].copy()
         mt = self.mt
         if trade['end'] - trade['start'] > 7 * 86400000:

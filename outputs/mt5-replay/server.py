@@ -4,6 +4,7 @@ import secrets
 import webbrowser
 import hashlib
 import urllib.request
+import base64
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -13,11 +14,11 @@ from core import Bridge, running_terminals
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 token = secrets.token_urlsafe(32)
-VERSION = '0.7.4'
+VERSION = '1.0.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['server.py', 'core.py', 'credentials.py', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -50,6 +51,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(health())
         routes = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
         routes['/connection.js'] = ('connection.js', 'text/javascript')
+        routes['/journal.js'] = ('journal.js', 'text/javascript')
+        routes['/journal.css'] = ('journal.css', 'text/css')
         route = routes.get(urlparse(self.path).path)
         if not route:
             return self.send({'error': 'Not found'}, 404)
@@ -58,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', route[1] + '; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' blob:; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         self.wfile.write(raw)
 
@@ -67,10 +70,32 @@ class Handler(BaseHTTPRequestHandler):
             return self.send({'error': 'Unauthorized'}, 403)
         try:
             length = int(self.headers.get('Content-Length', 0))
-            if not 0 < length < 8192:
+            limit = 5 * 1024 * 1024 if self.path == '/api/journal/attach' else 128 * 1024
+            if not 0 < length < limit:
                 raise ValueError('Invalid request length')
             body = json.loads(self.rfile.read(length))
-            if self.path == '/api/terminals':
+            if self.path == '/api/journal/overview':
+                result = bridge.journal.overview(body.get('account') or bridge.journal_account)
+            elif self.path == '/api/journal/entry':
+                result = bridge.journal.entry(body['account'], str(body['position']))
+            elif self.path == '/api/journal/save':
+                result = bridge.journal.save(body['account'], str(body['position']), body['review'])
+            elif self.path == '/api/journal/attach':
+                result = bridge.journal.attach(body['account'], str(body['position']), body.get('name', 'Screenshot'), body['data'])
+            elif self.path == '/api/journal/image':
+                raw,mime = bridge.journal.image(body['account'],body['id'])
+                result = dict(data=base64.b64encode(raw).decode('ascii'),mime=mime)
+            elif self.path == '/api/journal/remove-image':
+                result = bridge.journal.remove_image(body['account'],body['id'])
+            elif self.path == '/api/journal/backup':
+                raw=bridge.journal.backup()
+                self.send_response(200)
+                self.send_header('Content-Type','application/octet-stream')
+                self.send_header('Cache-Control','no-store')
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            elif self.path == '/api/terminals':
                 bridge.stage = 'terminal'
                 result = dict(terminals=running_terminals())
             elif self.path == '/api/connect':

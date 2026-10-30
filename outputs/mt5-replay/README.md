@@ -1,6 +1,19 @@
-# MT5 Replay
+# MT5 Trading Journal
 
 A private, read-only local Windows app to replay closed MT5 trades, with outcomes, net P&L, recorded exit reasons, SL/TP and pre-entry candles.
+
+## Trading journal (v1.0.0)
+
+The **Journal**, **Calendar**, and **Trade replay** tabs share the same MT5 account history.
+
+- Connecting and loading MT5 history saves supported closed-trade snapshots locally. Repeated syncs update imported facts without overwriting notes or attachments. To include older trades, widen the replay history From/To dates and load again.
+- Select a saved trade to add notes, a lesson, up to 12 setup tags, a process rating, four checklist items, and a reviewed flag. Click **Save review**; unsaved changes are indicated and protected when switching trades or closing the page.
+- The calendar groups trades by exit date in Bangkok, UTC, or your browser's local timezone. Green/red daily cells show net P&L and trade count. Click a day to filter its trades; previous/next controls change the month.
+- Statistics show net P&L, trade count, wins / all closed trades, profit factor (gross gains / absolute gross losses), average net P&L and reviewed count. Search/status filters apply; Calendar statistics cover the selected month. Accounts and currencies are not combined. Summaries cover only synced supported positions and linked charges, not deposits, withdrawals, open trades or all account-level fees.
+- Upload PNG/JPEG/WebP screenshots (3 MB each, eight per trade), or replay the selected trade and return to Journal to capture its chart. Screenshot links open the full image. Screenshots and notes work without MT5; tick replay still requires the matching account connected.
+- Saved records remain available after restarting or disconnecting MT5. **Download journal backup** creates a SQLite backup containing snapshots, reviews and images, without the API key.
+
+The database is `.local/journal.sqlite3`, excluded from Git. Unlike the separately encrypted API key, journal records and downloaded backups are **not encrypted**. To restore a backup, stop the app, keep a copy of the existing database, and replace `.local/journal.sqlite3` with the downloaded SQLite file before restarting. No journal data is uploaded to external services. The sample replay is never added to your journal.
 
 ## Start
 

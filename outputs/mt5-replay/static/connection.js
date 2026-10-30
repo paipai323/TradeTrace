@@ -82,6 +82,7 @@ async function pollLevels() {
 setInterval(pollLevels, 5000);
 
 function showAccount(account) {
+  window.journalConnectedAccount=account;
   currency=account.currency;connected=true;
   $('account').textContent=`${account.server} · Account ${account.account} · ${account.currency}`;
   for(const stage of ['terminal','connector','account'])check(stage,'passed');

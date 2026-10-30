@@ -13,6 +13,32 @@ def deal(ticket, entry, side, **kw):
 
 
 class ReconstructionTests(unittest.TestCase):
+    def test_saved_position_outside_loaded_dates_can_replay(self):
+        b=Bridge()
+        b.account=123
+        b.mt=Row(account_info=lambda:Row(login=123),symbol_select=lambda *a:True,
+            history_deals_get=Mock(return_value=[deal(1,0,0),deal(2,1,1,reason=5)]),
+            history_orders_get=lambda **kw:[Row(sl=1.08,tp=1.12)],COPY_TICKS_ALL=0,
+            TIMEFRAME_M1=1,copy_rates_range=lambda *a:[],
+            copy_ticks_range=lambda *a:[dict(time_msc=1000,bid=1.1,ask=1.1001),dict(time_msc=2000,bid=1.11,ask=1.1101)])
+        self.assertEqual(b.trades,{})
+        result=b.replay('77')
+        self.assertEqual(result['trade']['id'],'77')
+        self.assertIn('77',b.trades)
+        b.mt.history_deals_get.assert_called_with(position=77)
+
+    def test_history_syncs_snapshot_to_journal(self):
+        from datetime import datetime, timezone
+        b=Bridge()
+        b.account,b.server=123,'Broker'
+        b.mt=Row(account_info=lambda:Row(login=123,server='Broker',currency='USD'),
+            history_deals_get=lambda *a:[deal(1,0,0),deal(2,1,1,profit=12)])
+        b.sync_levels=Mock()
+        b.journal=Mock()
+        result=b.history(datetime(1970,1,1,tzinfo=timezone.utc),datetime(2026,1,1,tzinfo=timezone.utc))
+        b.journal.sync.assert_called_once_with(123,'Broker','USD',result['trades'])
+        self.assertEqual(result['trades'][0]['net'],11)
+
     def test_one_click_connect_reuses_authenticated_native_session(self):
         b = Bridge()
         previous = Mock()
