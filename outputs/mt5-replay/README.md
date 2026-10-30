@@ -33,3 +33,11 @@ node --check static/app.js
 ```
 
 API references: [historical deals](https://www.mql5.com/en/docs/python_metatrader5/mt5historydealsget_py), [tick ranges](https://www.mql5.com/en/docs/python_metatrader5/mt5copyticksrange_py), [deal properties](https://www.mql5.com/en/docs/constants/tradingconstants/dealproperties).
+
+## Connection and verification (v0.2.0)
+
+Click **Find running MT5**, select the signed-in terminal and connect. The advanced path box overrides the selection; normally leave it empty. The checks distinguish terminal discovery, connector initialization, account login, history and tick availability. Later stages remain waiting until used.
+
+The header shows the app version and build. Running Start.cmd twice opens the existing server only if its app identity, workspace and build match. An older server or unrelated service on the port causes a clear error: close the old replay console and start again. The launcher never terminates another process.
+
+After selecting a real trade, expand **Check this trade against MT5 History** and reread the execution records. It checks cached import values against a fresh MT5 read and displays both executions and linked costs. Compare these with MT5’s History tab to independently confirm entry/exit, timestamps, lots, charges and closure reason. This is import consistency verification, not proof of complete broker tick coverage.

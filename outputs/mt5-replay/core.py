@@ -7,7 +7,7 @@ import os
 import subprocess
 
 
-def running_terminal_path(requested=''):
+def running_terminals():
     """Do not let initialize auto-select an installation that isn't running."""
     if os.name != 'nt':
         raise ValueError('Live MT5 connections require Windows.')
@@ -37,6 +37,11 @@ def running_terminal_path(requested=''):
             paths = [paths]
     except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
         raise ValueError('Cannot inspect running MT5 terminals. Open MT5 normally, then run Start.cmd yourself.')
+    return paths
+
+
+def running_terminal_path(requested=''):
+    paths = running_terminals()
     requested = requested.strip().strip('"')
     if requested:
         matches = [p for p in paths if os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(requested))]
@@ -81,9 +86,12 @@ class Bridge:
     def __init__(self):
         self.mt = None
         self.trades = {}
+        self.stage = 'terminal'
 
     def connect(self, path=''):
+        self.stage = 'terminal'
         path = running_terminal_path(path)
+        self.stage = 'connector'
         try:
             import MetaTrader5 as mt
         except ImportError:
@@ -95,6 +103,7 @@ class Bridge:
         ok = mt.initialize(path, timeout=15000)
         if not ok:
             raise ValueError(f'Cannot connect to MT5: {mt.last_error()}. Open MT5 and sign in first.')
+        self.stage = 'account'
         account = mt.account_info()
         terminal = mt.terminal_info()
         if account is None or not account.login or terminal is None or not terminal.connected:
@@ -102,7 +111,7 @@ class Bridge:
             raise ValueError('MT5 has no signed-in account.')
         self.mt = mt
         self.account = account.login
-        return dict(currency=account.currency, server=account.server, account=str(account.login))
+        return dict(currency=account.currency, server=account.server, account=str(account.login), path=path)
 
     def check(self):
         if not self.mt:
@@ -113,7 +122,9 @@ class Bridge:
             raise ValueError('MT5 account changed or disconnected. Reconnect and load trades again.')
 
     def history(self, start, end):
+        self.stage = 'account'
         self.check()
+        self.stage = 'history'
         # Query all available entries so a position opened before the selected period is retained.
         rows = self.mt.history_deals_get(datetime(2000, 1, 1, tzinfo=timezone.utc), end)
         if rows is None:
@@ -124,7 +135,9 @@ class Bridge:
         return dict(trades=trades, skipped=skipped)
 
     def replay(self, pid):
+        self.stage = 'account'
         self.check()
+        self.stage = 'ticks'
         if pid not in self.trades:
             raise ValueError('Load trades again and select a position.')
         trade = self.trades[pid].copy()
@@ -156,10 +169,32 @@ class Bridge:
         points.sort(key=lambda p: p[0])
         if not points:
             raise ValueError('No historical bid/ask ticks available. Replay cannot be reconstructed from this broker.')
-        warnings = ['SL/TP lines are the closing order’s recorded levels; past modifications cannot be reconstructed. Floating movement is shown in price units, not account currency.']
+        warnings = ['SL/TP lines are the closing order窶冱 recorded levels; past modifications cannot be reconstructed. Floating movement is shown in price units, not account currency.']
         if points[0][0] - trade['start'] > 5000 or trade['end'] - points[-1][0] > 5000:
             warnings.append('Tick coverage does not reach within 5 seconds of entry or exit.')
         gaps = sum(b[0] - a[0] > 60000 for a, b in zip(points, points[1:]))
         if gaps:
             warnings.append(f'{gaps} gaps over 60 seconds; these may include closed market hours or missing ticks.')
-        return dict(trade=trade, points=points, warnings=warnings, source='Broker historical ticks • coverage not guaranteed')
+        return dict(trade=trade, points=points, warnings=warnings, source='Broker historical ticks 窶｢ coverage not guaranteed')
+
+    def verify(self, pid):
+        self.stage = 'account'
+        self.check()
+        self.stage = 'verification'
+        if pid not in self.trades:
+            raise ValueError('Reload history and select a position first.')
+        rows = self.mt.history_deals_get(position=int(pid))
+        if rows is None:
+            raise ValueError('Cannot read the position’s execution records from MT5.')
+        reconstructed, _ = closed_positions(rows)
+        if len(reconstructed) != 1:
+            raise ValueError('Position history has changed or is no longer supported. Reload history.')
+        actual = reconstructed[0]
+        fields = ['symbol', 'side', 'volume', 'start', 'end', 'entry', 'exit', 'reason', 'net']
+        differences = [k for k in fields if actual[k] != self.trades[pid][k]]
+        return dict(matches=not differences, differences=differences, position=actual,
+            deals=[dict(ticket=str(d.ticket), time=d.time_msc, entry=d.entry, price=d.price,
+                volume=d.volume, profit=d.profit, commission=d.commission, swap=d.swap,
+                fee=getattr(d, 'fee', 0)) for d in sorted(rows, key=lambda d: (d.time_msc, d.ticket))
+                if d.type in (0, 1)],
+            note='Compared with a fresh read of MT5 execution history. This checks import consistency; compare the records below with MT5 History for independent confirmation.')

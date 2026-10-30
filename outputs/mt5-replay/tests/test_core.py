@@ -13,6 +13,19 @@ def deal(ticket, entry, side, **kw):
 
 
 class ReconstructionTests(unittest.TestCase):
+    def test_fresh_verification_detects_changed_net(self):
+        rows = [deal(1, 0, 0), deal(2, 1, 1, reason=5, profit=12)]
+        b = Bridge()
+        b.account = 1
+        b.trades = {'77': closed_positions(rows)[0][0]}
+        b.mt = Row(account_info=lambda: Row(login=1), history_deals_get=lambda **kw: rows)
+        self.assertTrue(b.verify('77')['matches'])
+        rows[1].profit = 15
+        report = b.verify('77')
+        self.assertFalse(report['matches'])
+        self.assertEqual(report['differences'], ['net'])
+        self.assertEqual(len(report['deals']), 2)
+
     def test_guard_blocks_connector_initialization(self):
         connector = Mock()
         with patch('core.running_terminal_path', side_effect=ValueError('restricted Windows permissions')):

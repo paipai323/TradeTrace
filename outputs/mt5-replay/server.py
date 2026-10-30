@@ -2,15 +2,36 @@ import argparse
 import json
 import secrets
 import webbrowser
+import hashlib
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
-from core import Bridge
+from core import Bridge, running_terminals
 
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 token = secrets.token_urlsafe(32)
+VERSION = '0.2.0'
+APP_ID = 'local-mt5-replay'
+APP_ROOT = Path(__file__).resolve().parent
+BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
+    ['server.py', 'core.py', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css'])).hexdigest()[:12]
+
+
+def health():
+    return dict(app=APP_ID, version=VERSION, build=BUILD,
+        workspace=hashlib.sha256(str(APP_ROOT).encode()).hexdigest()[:12])
+
+
+def existing_server(url):
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url + '/health', timeout=2) as response:
+            info = json.load(response)
+        return info == health()
+    except (OSError, ValueError):
+        return False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -25,11 +46,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.headers.get('Host') not in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}'):
             return self.send({'error': 'Invalid host'}, 403)
+        if urlparse(self.path).path == '/health':
+            return self.send(health())
         routes = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+        routes['/connection.js'] = ('connection.js', 'text/javascript')
         route = routes.get(urlparse(self.path).path)
         if not route:
             return self.send({'error': 'Not found'}, 404)
-        raw = (ROOT / route[0]).read_text(encoding='utf-8').replace('__TOKEN__', token).encode()
+        raw = (ROOT / route[0]).read_text(encoding='utf-8').replace('__TOKEN__', token).replace('__VERSION__', VERSION).replace('__BUILD__', BUILD).encode()
         self.send_response(200)
         self.send_header('Content-Type', route[1] + '; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
@@ -46,7 +70,10 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length < 8192:
                 raise ValueError('Invalid request length')
             body = json.loads(self.rfile.read(length))
-            if self.path == '/api/connect':
+            if self.path == '/api/terminals':
+                bridge.stage = 'terminal'
+                result = dict(terminals=running_terminals())
+            elif self.path == '/api/connect':
                 result = bridge.connect(body.get('path', '').strip())
             elif self.path == '/api/history':
                 start = datetime.strptime(body['start'], '%Y-%m-%d').replace(tzinfo=timezone.utc)
@@ -56,23 +83,35 @@ class Handler(BaseHTTPRequestHandler):
                 result = bridge.history(start, end)
             elif self.path == '/api/replay':
                 result = bridge.replay(str(body['id']))
+            elif self.path == '/api/verify':
+                result = bridge.verify(str(body['id']))
             else:
                 return self.send({'error': 'Not found'}, 404)
             self.send(result)
         except (ValueError, KeyError, TypeError) as exc:
-            self.send({'error': str(exc)}, 400)
+            self.send({'error': str(exc), 'stage': bridge.stage}, 400)
         except Exception:
             self.send({'error': 'Unexpected connector error. Check MT5 connection and retry.'}, 500)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
-    server = HTTPServer(('127.0.0.1', args.port), Handler)
+    url = f'http://127.0.0.1:{args.port}'
+    try:
+        server = HTTPServer(('127.0.0.1', args.port), Handler)
+    except OSError:
+        if existing_server(url):
+            print(f'MT5 Replay {VERSION} is already running: {url}', flush=True)
+            if not args.no_browser:
+                webbrowser.open(url)
+            raise SystemExit(0)
+        print(f'Port {args.port} is occupied by an older replay version or another app. Close the old replay console and run Start.cmd again. No process was stopped.', flush=True)
+        raise SystemExit(1)
     url = f'http://127.0.0.1:{server.server_port}'
-    print(f'MT5 Replay: {url}  (Ctrl+C to stop)', flush=True)
+    print(f'MT5 Replay {VERSION} ({BUILD}): {url}  (Ctrl+C to stop)', flush=True)
     if not args.no_browser:
         webbrowser.open(url)
     try:
