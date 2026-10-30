@@ -18,6 +18,8 @@ The database is `.local/journal.sqlite3`, excluded from Git. Unlike the separate
 
 ## Start
 
+You can launch using **MT5 Journal.lnk**, the custom notebook/candlestick icon shortcut beside Start.cmd. The shortcut starts the launcher with its console minimized. If the app folder is moved, run **CreateShortcut.ps1** to regenerate the shortcut for its new location. The icon is journal.ico; local shortcuts are excluded from Git.
+
 Run **Install.cmd** once if dependencies are missing. Open MT5 and sign in, then double-click **Start.cmd** in File Explorer. The app opens at http://127.0.0.1:8766. Click **Connect MT5**. The app finds your running terminal, connects the price and SL/TP interfaces, and loads the chosen exit dates (UTC) automatically. If multiple terminals are running, choose one under Connection settings.
 
 ## One-click connection and saved key (v0.7.1)
