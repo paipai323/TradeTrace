@@ -62,6 +62,7 @@ function clearJournalSelection(){
   $('journal-empty').querySelector('h2').textContent='Select a trade from this date.';
   $('journal-empty').querySelector('p').textContent='Choose a position on the left to open its review and replay.';
   $('journal-save-status').textContent='';$('journal-replay-status').textContent='';
+  $('journal-upload-status').textContent='';
   for(const url of journalImageUrls)URL.revokeObjectURL(url);journalImageUrls=[];$('journal-images').replaceChildren();
   updateReplayActions();
 }
@@ -219,20 +220,44 @@ async function renderJournalImages(images,account,position){
     figure.append(link,element('figcaption',attachment.name),remove);$('journal-images').append(figure);
   }
 }
-async function attachJournalImage(name,encoded){
-  if(!journalPosition)return;
-  const account=journalModel.account,position=journalPosition;
+async function attachJournalImage(name,encoded,target=null){
+  if(!target&&!journalPosition)return;
+  const account=target?target.account:journalModel.account,position=target?target.position:journalPosition;
   await api('journal/attach',{account,position,name,data:encoded});
   if(account===journalModel.account&&position===journalPosition){const entry=await api('journal/entry',{account,position});await renderJournalImages(entry.images,account,position);}
 }
-$('journal-upload').onchange=async()=>{
-  const file=$('journal-upload').files[0];if(!file)return;
-  try{
-    if(file.size>3*1024*1024)throw Error('Choose a screenshot smaller than 3 MB.');
-    const encoded=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file);});
-    await attachJournalImage(file.name,encoded);status('Screenshot saved to your journal.');
-  }catch(error){status(error.message);}finally{$('journal-upload').value='';}
-};
+let screenshotQueue=Promise.resolve();
+function uploadScreenshotFiles(files){
+  if(!journalPosition)return;
+  const target={account:journalModel.account,position:journalPosition},batch=Array.from(files);
+  screenshotQueue=screenshotQueue.then(async()=>{
+    let saved=0;const failures=[];
+    const current=()=>target.account===journalModel.account&&target.position===journalPosition;
+    if(current())$('journal-upload-status').textContent='Saving screenshots…';
+    for(const file of batch){
+      try{
+        if(!['image/png','image/jpeg','image/webp'].includes(file.type)&&!(file.type===''&&/\.(png|jpe?g|webp)$/i.test(file.name)))throw Error('Use PNG, JPEG or WebP images.');
+        if(file.size>3*1024*1024)throw Error('Each screenshot must be smaller than 3 MB.');
+        const encoded=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(Error('Could not read image.'));reader.readAsDataURL(file);});
+        await attachJournalImage(file.name||'Clipboard image.png',encoded,target);saved++;
+      }catch(error){failures.push(error.message);}
+    }
+    if(current())$('journal-upload-status').textContent=(saved?`${saved} screenshot${saved===1?'':'s'} saved. `:'')+[...new Set(failures)].join(' ');
+  }).catch(error=>status(error.message));
+}
+$('journal-upload').onchange=()=>{uploadScreenshotFiles($('journal-upload').files);$('journal-upload').value='';};
+let screenshotDragDepth=0;
+$('journal-dropzone').addEventListener('dragenter',event=>{if(!Array.from(event.dataTransfer?.types||[]).includes('Files'))return;event.preventDefault();screenshotDragDepth++;$('journal-dropzone').classList.add('drag-over');});
+$('journal-dropzone').addEventListener('dragover',event=>{if(Array.from(event.dataTransfer?.types||[]).includes('Files')){event.preventDefault();event.dataTransfer.dropEffect='copy';}});
+$('journal-dropzone').addEventListener('dragleave',event=>{event.preventDefault();screenshotDragDepth=Math.max(0,screenshotDragDepth-1);if(!screenshotDragDepth)$('journal-dropzone').classList.remove('drag-over');});
+$('journal-dropzone').addEventListener('drop',event=>{event.preventDefault();screenshotDragDepth=0;$('journal-dropzone').classList.remove('drag-over');uploadScreenshotFiles(event.dataTransfer.files);});
+$('journal-dropzone').addEventListener('keydown',event=>{if(event.target===$('journal-dropzone')&&(event.key==='Enter'||event.key===' ')){event.preventDefault();$('journal-upload').click();}});
+document.addEventListener('paste',event=>{
+  if(!journalPosition||$('journal-form').hidden||$('journal-pane').hidden||$('screenshot-viewer').open)return;
+  if(document.activeElement!==document.body&&!$('journal-form').contains(document.activeElement))return;
+  const images=Array.from(event.clipboardData?.items||[]).filter(item=>item.kind==='file'&&item.type.startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
+  if(images.length){event.preventDefault();uploadScreenshotFiles(images);}
+});
 $('journal-capture').onclick=async()=>{try{snapshotReplay();updateReplayActions();if($('journal-capture').disabled)return;const snapshot=window.journalChartSnapshot;await attachJournalImage('Replay chart · '+stamp(snapshot.clock),snapshot.image.split(',')[1]);status('Replay chart saved to this trade.');}catch(error){status(error.message);}};
 async function ensureJournalReplay(){
   const position=journalPosition,sourceAccount=journalModel.account;
@@ -251,7 +276,7 @@ async function ensureJournalReplay(){
   if(!account||account.login!==window.journalConnectedAccount?.account||account.server!==window.journalConnectedAccount?.server)throw Error('Connect MT5 to this journal account to replay its trades.');
   $('journal-replay-status').textContent='Loading historical prices…';
   if(!replayMatchesJournal()){
-    const response=await api('replay',{id:position,context_minutes:Number($('context-minutes').value)});
+    const response=await api('replay',{id:position,context_minutes:historyRequest(),candle_timeframe:$('candle-timeframe').value});
     if(position!==journalPosition||sourceAccount!==journalModel.account)return false;
     setData(response);
   }

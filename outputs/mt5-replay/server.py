@@ -14,7 +14,7 @@ from core import Bridge, running_terminals
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 token = secrets.token_urlsafe(32)
-VERSION = '1.3.0'
+VERSION = '1.5.2'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
@@ -118,7 +118,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('End date must be on or after start date.')
                 result = bridge.history(start, end)
             elif self.path == '/api/replay':
-                result = bridge.replay(str(body['id']), body.get('context_minutes', 60))
+                result = bridge.replay(str(body['id']), body.get('context_minutes', 'auto'), body.get('candle_timeframe','M1'))
             elif self.path == '/api/verify':
                 result = bridge.verify(str(body['id']))
             elif self.path == '/api/connect-native':

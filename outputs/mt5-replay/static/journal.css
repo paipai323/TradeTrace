@@ -3,3 +3,21 @@
 #journal-inline-replay{margin:18px 0 26px;border:1px solid #33435b;border-radius:10px;background:#0e1725;overflow:hidden}#journal-inline-replay .player{padding:18px}#journal-inline-replay .player-head h2{font-size:17px}#journal-inline-replay .chart-wrap{height:350px}#journal-inline-replay .transport{flex-wrap:wrap}#journal-inline-replay .context-controls span{width:100%}#journal-inline-replay .metrics{gap:12px}#journal-inline-replay #details{overflow-wrap:anywhere}@media(max-width:1050px){#journal-inline-replay .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#journal-inline-replay .player-head{flex-wrap:wrap}#journal-inline-replay #time{margin:6px 0;width:100%}}@media(max-width:480px){#journal-inline-replay .player{padding:12px}#journal-inline-replay .chart-wrap{height:280px}}
 
 #journal-images .screenshot-thumbnail{display:block;width:100%;padding:0;margin:0;background:transparent;border:0;cursor:zoom-in}#screenshot-viewer{width:min(1440px,96vw);max-width:96vw;max-height:95vh;padding:18px;border:1px solid #526680;border-radius:12px;background:#101a29;color:#e8eef8;box-shadow:0 20px 80px #0009}#screenshot-viewer::backdrop{background:#030812db}.screenshot-dialog-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}.screenshot-dialog-header h2{flex:1;font-size:15px;overflow-wrap:anywhere}.screenshot-dialog-header button{font-size:12px;white-space:nowrap}#screenshot-viewport{overflow:auto;max-height:75vh;background:#080e18;border-radius:7px}#screenshot-full{display:block;margin:auto;max-width:100%;max-height:73vh;object-fit:contain;cursor:zoom-in}#screenshot-viewport.actual-size #screenshot-full{max-width:none;max-height:none;cursor:zoom-out}#screenshot-viewer>p{font-size:11px;margin:12px 0 0}@media(max-width:480px){#screenshot-viewer{padding:10px}.screenshot-dialog-header{flex-wrap:wrap;gap:7px}.screenshot-dialog-header h2{flex-basis:100%;margin:0}.screenshot-dialog-header button{padding:8px}}
+
+#journal-dropzone{display:flex;flex-direction:column;gap:9px;padding:21px;margin:13px 0;border:1px dashed #526984;border-radius:9px;background:#0e1827;transition:border-color .15s,background .15s}#journal-dropzone>strong{font-size:13px;color:#b8cbe2}#journal-dropzone>span{font-size:11px;color:#8297b2}#journal-dropzone.drag-over{border-color:#70e4c2;background:#173930}#journal-dropzone:focus-visible{outline:2px solid #70e4c2;outline-offset:3px}#journal-dropzone .upload-label{font-size:11px;margin-top:3px}#journal-dropzone input{padding:8px;font-size:11px}.screenshots{margin-bottom:25px}#journal-upload-status{color:#a7c7b9}
+
+/* Shared typography for trade-review forms and attachments. */
+:root{--review-heading:16px;--review-body:14px;--review-label:13px;--review-caption:12px}
+#journal-form{font-size:var(--review-body);line-height:1.6}
+#journal-form>label,.review-controls>label,fieldset .check-label,fieldset legend{font-size:var(--review-label);font-weight:500;line-height:1.6}
+#journal-tags,#journal-notes,#journal-lesson,.review-controls select{font-family:inherit;font-size:var(--review-body);line-height:1.6}
+#journal-form button{font-family:inherit;font-size:var(--review-label);font-weight:600}
+#journal-form .screenshots h3{font-size:var(--review-heading);font-weight:600;line-height:1.4;margin:12px 0 16px}
+#journal-dropzone>strong{font-size:var(--review-body);font-weight:600;line-height:1.5}
+#journal-dropzone>span,#journal-dropzone .upload-label{font-size:var(--review-caption);line-height:1.6}
+#journal-dropzone input{font-family:inherit;font-size:var(--review-label);line-height:1.5;padding:10px}
+#journal-dropzone input::file-selector-button{font-family:inherit;font-size:var(--review-label);font-weight:600;border:1px solid #415470;border-radius:5px;background:#23344b;color:#e8eef8;padding:6px 10px;margin-right:10px;cursor:pointer}
+#journal-images figcaption,.screenshots>p,#journal-save-status{font-size:var(--review-caption);line-height:1.6}
+.screenshot-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+#journal-form .screenshot-actions button{margin:0;padding:10px 13px;min-height:40px}
+#journal-images figure>button{font-size:var(--review-label);padding:8px 12px}

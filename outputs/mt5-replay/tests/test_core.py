@@ -13,6 +13,34 @@ def deal(ticket, entry, side, **kw):
 
 
 class ReconstructionTests(unittest.TestCase):
+    def test_automatic_history_selects_latest_80_completed_candles(self):
+        b=Bridge();b.account=123
+        b.trades={'77':dict(id='77',symbol='EURUSD',side='BUY',start=10000000,end=10010000,entry=1.1,exit=1.11,order=2)}
+        b.mt=Row(account_info=lambda:Row(login=123),symbol_select=lambda *a:True,
+            history_deals_get=lambda **kw:[],history_orders_get=lambda **kw:[],COPY_TICKS_ALL=0,TIMEFRAME_M1=1,
+            copy_ticks_range=lambda *a:[dict(time_msc=10000000,bid=1.1,ask=1.1001)],
+            copy_rates_range=lambda *a:[dict(time=i*60,open=1.1,high=1.2,low=1,close=1.15) for i in range(120)])
+        result=b.replay('77')
+        self.assertEqual(len(result['context']),80)
+        self.assertEqual(result['context_start'],40*60000)
+        self.assertEqual(result['context_mode'],'auto')
+        self.assertEqual(b.replay('77',60)['context_mode'],'manual')
+
+    def test_m5_context_uses_selected_period_and_excludes_unfinished_bar(self):
+        b=Bridge();b.account=123
+        b.trades={'77':dict(id='77',symbol='EURUSD',side='BUY',start=750000,end=780000,entry=1.1,exit=1.11,order=2)}
+        b.mt=Row(account_info=lambda:Row(login=123),symbol_select=lambda *a:True,
+            history_deals_get=lambda **kw:[],history_orders_get=lambda **kw:[],COPY_TICKS_ALL=0,TIMEFRAME_M5=5,
+            copy_ticks_range=lambda *a:[dict(time_msc=750000,bid=1.1,ask=1.1001)],
+            copy_rates_range=Mock(return_value=[dict(time=t,open=1.1,high=1.2 if t<600 else 99,low=1,close=1.15) for t in [0,300,600]]))
+        result=b.replay('77',15,'M5')
+        self.assertEqual(result['candle_timeframe'],'M5')
+        self.assertEqual(result['candle_ms'],300000)
+        self.assertEqual([bar[0] for bar in result['context']],[0,300000])
+        self.assertEqual(b.mt.copy_rates_range.call_args.args[1],5)
+        with self.assertRaisesRegex(ValueError,'candles'):
+            b.replay('77',15,'BAD')
+
     def test_saved_position_outside_loaded_dates_can_replay(self):
         b=Bridge()
         b.account=123

@@ -198,12 +198,17 @@ class Bridge:
         self.journal_account = self.journal.sync(self.account, self.server, self.mt.account_info().currency, trades)
         return dict(trades=trades, skipped=skipped)
 
-    def replay(self, pid, context_minutes=60):
+    def replay(self, pid, context_minutes='auto', candle_timeframe='M1'):
         self.stage = 'account'
         self.check()
         self.stage = 'ticks'
-        if context_minutes not in (15, 30, 60, 240, 480, 720, 1440, 4320, 10080):
+        automatic=context_minutes=='auto'
+        if not automatic and context_minutes not in (15, 30, 60, 240, 480, 720, 1440, 4320, 10080):
             raise ValueError('Choose a history period between 15 minutes and 1 week from the menu.')
+        durations={'M1':60,'M5':300,'M15':900,'M30':1800,'H1':3600,'H4':14400}
+        if candle_timeframe not in durations:
+            raise ValueError('Choose M1, M5, M15, M30, H1 or H4 candles.')
+        candle_ms=durations[candle_timeframe]*1000
         if pid not in self.trades:
             if not pid.isdigit():
                 raise ValueError('Invalid position ID.')
@@ -260,22 +265,28 @@ class Bridge:
         gaps = sum(b[0] - a[0] > 60000 for a, b in zip(points, points[1:]))
         if gaps:
             warnings.append(f'{gaps} gaps over 60 seconds; these may include closed market hours or missing ticks.')
-        context_start = max(0, trade['start'] - context_minutes * 60000)
+        lookback_minutes=(durations[candle_timeframe]//60)*120+4320 if automatic else context_minutes
+        context_start = max(0, trade['start'] - lookback_minutes * 60000)
         context = []
-        rates = mt.copy_rates_range(trade['symbol'], mt.TIMEFRAME_M1, utc(context_start), utc(trade['start']))
+        rates = mt.copy_rates_range(trade['symbol'], getattr(mt,'TIMEFRAME_'+candle_timeframe), utc(context_start), utc(trade['start']))
         if rates is not None:
             for bar in rates:
                 ms = int(bar['time']) * 1000
                 # Only completed pre-entry candles: never reveal post-entry OHLC.
-                if context_start <= ms and ms + 60000 <= trade['start']:
+                if context_start <= ms and ms + candle_ms <= trade['start']:
                     context.append([ms, float(bar['open']), float(bar['high']), float(bar['low']), float(bar['close'])])
         context.sort(key=lambda b: b[0])
+        if automatic and context:
+            context=context[-80:]
+            context_start=context[0][0]
         if not context:
-            warnings.append('No completed M1 candles available for the requested pre-entry context.')
-        elif context[0][0] - context_start > 60000:
+            warnings.append(f'No completed {candle_timeframe} candles in this history window. Choose a longer History before entry period or a smaller candle timeframe.')
+        elif not automatic and context[0][0] - context_start > candle_ms:
             warnings.append('Pre-entry candle coverage starts later than requested; market hours or missing history may explain the gap.')
-        return dict(trade=trade, points=points, context=context, context_start=context_start,
-            warnings=warnings, source='Broker historical ticks + pre-entry M1 candles; coverage not guaranteed')
+        if automatic and context and len(context)<80:
+            warnings.append(f'Loaded {len(context)} completed candles; fewer than the automatic 80-candle target were available.')
+        return dict(trade=trade, points=points, context=context, context_start=context_start,candle_timeframe=candle_timeframe,candle_ms=candle_ms,context_mode='auto' if automatic else 'manual',
+            warnings=warnings, source=f'Broker historical ticks + pre-entry {candle_timeframe} candles; coverage not guaranteed')
 
     def connect_native(self, url, key):
         self.stage = 'account'
