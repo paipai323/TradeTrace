@@ -1,6 +1,51 @@
 """Read-only MT5 history reconstruction. No trading operations."""
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
+import ctypes
+import json
+import os
+import subprocess
+
+
+def running_terminal_path(requested=''):
+    """Do not let initialize auto-select an installation that isn't running."""
+    if os.name != 'nt':
+        raise ValueError('Live MT5 connections require Windows.')
+    from ctypes import wintypes
+    token = wintypes.HANDLE()
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    security = ctypes.WinDLL('advapi32', use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    security.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    security.IsTokenRestricted.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    if not security.OpenProcessToken(kernel.GetCurrentProcess(), 8, ctypes.byref(token)):
+        raise ValueError('Cannot verify Windows permissions. Start the replay using Start.cmd in File Explorer.')
+    try:
+        if security.IsTokenRestricted(token):
+            raise ValueError('Replay is running with restricted Windows permissions. Close its console and double-click Start.cmd in File Explorer before connecting.')
+    finally:
+        kernel.CloseHandle(token)
+    command = "@(Get-Process -Name terminal64 -ErrorAction SilentlyContinue | ForEach-Object { $_.Path } | Where-Object { $_ } | Select-Object -Unique) | ConvertTo-Json -Compress"
+    try:
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
+            capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
+        if result.returncode:
+            raise ValueError('Cannot inspect running MT5 terminals. Run MT5 and replay as the same Windows user.')
+        paths = json.loads(result.stdout.strip() or '[]')
+        if isinstance(paths, str):
+            paths = [paths]
+    except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+        raise ValueError('Cannot inspect running MT5 terminals. Open MT5 normally, then run Start.cmd yourself.')
+    requested = requested.strip().strip('"')
+    if requested:
+        matches = [p for p in paths if os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(requested))]
+        if not matches:
+            raise ValueError('That terminal is not visible as a running MT5. In Task Manager, right-click the signed-in terminal64.exe and choose Open file location to confirm its executable path. Run both apps as the same Windows user.')
+        return matches[0]
+    if len(paths) != 1:
+        raise ValueError('Open exactly one MT5 installation and sign in, or enter the executable path of the running terminal.')
+    return paths[0]
 
 
 def closed_positions(deals):
@@ -38,6 +83,7 @@ class Bridge:
         self.trades = {}
 
     def connect(self, path=''):
+        path = running_terminal_path(path)
         try:
             import MetaTrader5 as mt
         except ImportError:
@@ -46,11 +92,12 @@ class Bridge:
             self.mt.shutdown()
         self.mt = None
         self.trades = {}
-        ok = mt.initialize(path, timeout=15000) if path else mt.initialize(timeout=15000)
+        ok = mt.initialize(path, timeout=15000)
         if not ok:
             raise ValueError(f'Cannot connect to MT5: {mt.last_error()}. Open MT5 and sign in first.')
         account = mt.account_info()
-        if account is None:
+        terminal = mt.terminal_info()
+        if account is None or not account.login or terminal is None or not terminal.connected:
             mt.shutdown()
             raise ValueError('MT5 has no signed-in account.')
         self.mt = mt

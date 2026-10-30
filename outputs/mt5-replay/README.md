@@ -7,7 +7,7 @@ A private Windows app for replaying closed MT5 positions using historical bid/as
 1. Install 64-bit Python 3.10 or newer if needed.
 2. Run **Install.cmd** once (internet required for the official MetaTrader5 connector and its dependencies).
 3. Open MT5 and sign into the account you want to review.
-4. Run **Start.cmd**. Your browser opens at http://127.0.0.1:8765.
+4. Double-click **Start.cmd** yourself in File Explorer. Your browser opens at http://127.0.0.1:8766. This keeps the connector outside the coding assistant's restricted environment. The connector refuses restricted Windows tokens and requires an already running terminal before calling the MT5 API. The API itself can still launch a process if the terminal exits or cannot be reached during initialization.
 5. Connect, choose an inclusive range of **exit dates in UTC**, and load history. If multiple terminals are installed, enter the full path to the intended `terminal64.exe` before connecting. Verify the displayed account.
 6. Select a position and use Play, Next tick, speed, or the timeline. The synthetic sample works without MT5.
 

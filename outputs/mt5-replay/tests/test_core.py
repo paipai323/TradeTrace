@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch, Mock
 from types import SimpleNamespace as Row
 from core import closed_positions, Bridge
 
@@ -12,6 +13,14 @@ def deal(ticket, entry, side, **kw):
 
 
 class ReconstructionTests(unittest.TestCase):
+    def test_guard_blocks_connector_initialization(self):
+        connector = Mock()
+        with patch('core.running_terminal_path', side_effect=ValueError('restricted Windows permissions')):
+            with patch.dict('sys.modules', {'MetaTrader5': connector}):
+                with self.assertRaisesRegex(ValueError, 'restricted'):
+                    Bridge().connect()
+        connector.initialize.assert_not_called()
+
     def test_actual_stop_reason_and_net_include_both_sides(self):
         trades, skipped = closed_positions([deal(2, 1, 1, reason=4, profit=-10, swap=-1), deal(1, 0, 0)])
         self.assertEqual(skipped, 0)
