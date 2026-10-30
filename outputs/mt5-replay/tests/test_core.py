@@ -13,6 +13,43 @@ def deal(ticket, entry, side, **kw):
 
 
 class ReconstructionTests(unittest.TestCase):
+    def test_one_click_connect_reuses_authenticated_native_session(self):
+        b = Bridge()
+        previous = Mock()
+        b.direct = previous
+        def connect(path):
+            b.direct = None
+            b.account, b.server = 123, 'Broker'
+            return dict(account='123', server='Broker', currency='USD')
+        b.connect = Mock(side_effect=connect)
+        result = b.connect_all()
+        self.assertIs(b.direct, previous)
+        previous.verify_account.assert_called_once_with(123, 'Broker')
+        self.assertEqual(result['native']['state'], 'connected')
+
+    def test_one_click_connect_explains_missing_key_and_native_failure(self):
+        b = Bridge()
+        b.key_store = Mock()
+        b.key_store.load.return_value = None
+        b.connect = Mock(return_value=dict(account='123',server='Broker',currency='USD'))
+        self.assertEqual(b.connect_all()['native']['state'], 'setup')
+        b.connect_native = Mock(side_effect=ValueError('API key rejected'))
+        result = b.connect_all(key='fixture')
+        self.assertEqual(result['native']['state'], 'waiting')
+        self.assertEqual(result['native']['message'], 'API key rejected')
+
+    def test_saved_key_is_reused_after_restart_and_only_for_its_endpoint(self):
+        b = Bridge()
+        b.key_store = Mock()
+        b.key_store.load.return_value = dict(url='http://127.0.0.1:22346/mcp',key='fixture')
+        b.connect = Mock(return_value=dict(account='123',server='Broker',currency='USD'))
+        b.connect_native = Mock(return_value=dict(state='connected',levels=[]))
+        b.connect_all()
+        b.connect_native.assert_called_once_with('http://127.0.0.1:22346/mcp','fixture')
+        b.connect_native.reset_mock()
+        self.assertEqual(b.connect_all(url='http://127.0.0.1:22347/mcp')['native']['state'], 'setup')
+        b.connect_native.assert_not_called()
+
     def test_direct_history_matches_position_without_files_or_helpers(self):
         b = Bridge()
         b.account, b.server = 123, 'TestBroker'

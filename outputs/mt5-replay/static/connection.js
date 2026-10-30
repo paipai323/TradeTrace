@@ -14,17 +14,6 @@ function check(stage, state) {
 function resetChecks() {
   for (const stage of ['terminal', 'connector', 'account', 'history', 'ticks']) check(stage, 'waiting');
 }
-$('scan').onclick = () => task(async () => {
-  check('terminal', 'checking');
-  status('Finding MT5 terminals running under your Windows account…');
-  const result = await api('terminals', {});
-  $('terminals').replaceChildren();
-  $('terminals').append(new Option(result.terminals.length ? 'Choose your running terminal' : 'No running MT5 found', ''));
-  for (const path of result.terminals) $('terminals').append(new Option(path, path));
-  if (result.terminals.length === 1) $('terminals').value = result.terminals[0];
-  check('terminal', result.terminals.length ? 'passed' : 'failed');
-  status(result.terminals.length ? 'Choose the terminal you signed into, then click Connect to MT5.' : 'Open MT5 from your Windows shortcut, sign in, then click Find running MT5 again. Run replay using Start.cmd in File Explorer.');
-});
 $('verify').onclick = () => task(async () => {
   status('Comparing this position with a fresh read of MT5 executions…');
   const result = await api('verify', {id: data.trade.id});
@@ -49,12 +38,17 @@ $('verify').onclick = () => task(async () => {
 
 
 let directConnected = false;
-$('connect-native').onclick = () => task(async () => {
-  $('levels-status').textContent = 'Authenticating with the built-in MT5 history API…';
-  const result = await api('connect-native', {url:$('native-url').value.trim(), key:$('native-key').value});
-  $('native-key').value = '';
-  directConnected = true;
-  applyLevels(result);
+let keySaved = false;
+function keyState(saved) {
+  keySaved = saved;
+  $('key-state').textContent = saved ? 'API key saved with Windows encryption.' : 'The API key is saved with Windows encryption after a successful connection.';
+  $('native-key').placeholder = saved ? 'Saved key will be used · enter a new key to replace it' : 'Paste your MT5 API key once';
+  $('forget-key').disabled = !saved || busy;
+}
+$('forget-key').onclick=()=>task(async()=>{
+  const result=await api('forget-key',{});
+  directConnected=false;$('native-key').value='';keyState(false);
+  $('levels-status').textContent=result.message;status(result.message);
 });
 let levelsPolling = false;
 function applyLevels(result) {
@@ -73,7 +67,6 @@ function applyLevels(result) {
   }
 }
 async function pollLevels() {
-  $('connect-native').disabled = !connected || busy;
   if (!connected || !directConnected || busy || levelsPolling) return;
   const current = generation;
   levelsPolling = true;
@@ -87,3 +80,51 @@ async function pollLevels() {
   } finally { levelsPolling = false; }
 }
 setInterval(pollLevels, 5000);
+
+function showAccount(account) {
+  currency=account.currency;connected=true;
+  $('account').textContent=`${account.server} · Account ${account.account} · ${account.currency}`;
+  for(const stage of ['terminal','connector','account'])check(stage,'passed');
+}
+async function connectSession() {
+  resetChecks();check('terminal','checking');
+  status('Finding MT5, connecting history and loading your trades…');
+  connected=false;directConnected=false;data=null;generation++;render();$('trades').replaceChildren();
+  let result;
+  try {
+    result=await api('connect-all',{path:$('path').value||$('terminals').value,url:$('native-url').value.trim(),key:$('native-key').value});
+  } catch(error) {
+    $('connection-settings').open=true;
+    if(error.stage==='terminal') {
+      try {
+        const found=await api('terminals',{});
+        $('terminals').replaceChildren(new Option('Choose the signed-in terminal',''));
+        for(const path of found.terminals)$('terminals').append(new Option(path,path));
+      } catch(_) { /* Original connection error remains the useful message. */ }
+    }
+    throw error;
+  }
+  showAccount(result);
+  if ('key_saved' in result.native) keyState(result.native.key_saved);
+  directConnected=['active','connected'].includes(result.native.state);
+  applyLevels(result.native);
+  if(directConnected){$('native-key').value='';$('connection-settings').open=false;}
+  else $('connection-settings').open=true;
+  await loadHistory();
+  if(directConnected) {applyLevels(await api('sync-levels',{}));status('Connected. Choose a trade to replay.');}
+  else status('Trades loaded. '+result.native.message);
+}
+async function restoreSession() {
+  await task(async()=>{
+    const session=await api('session',{});
+    keyState(Boolean(session.key_saved));
+    if(session.native_url)$('native-url').value=session.native_url;
+    if(session.key_error){$('connection-settings').open=true;status(session.key_error);}
+    if(!session.connected)return;
+    showAccount(session);directConnected=session.direct;
+    await loadHistory();
+    if(directConnected)applyLevels(await api('sync-levels',{}));
+    status(directConnected?'Connection restored. Choose a trade to replay.':'Trades loaded. Add your API key in Connection settings for complete SL/TP.');
+  });
+}
+restoreSession();

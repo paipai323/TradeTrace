@@ -4,17 +4,19 @@ A private, read-only local Windows app to replay closed MT5 trades, with outcome
 
 ## Start
 
-Run **Install.cmd** once if dependencies are missing. Open MT5 and sign in, then double-click **Start.cmd** in File Explorer. The app opens at http://127.0.0.1:8766. Click **Find running MT5**, select your terminal, connect and load exit dates (UTC).
+Run **Install.cmd** once if dependencies are missing. Open MT5 and sign in, then double-click **Start.cmd** in File Explorer. The app opens at http://127.0.0.1:8766. Click **Connect MT5**. The app finds your running terminal, connects the price and SL/TP interfaces, and loads the chosen exit dates (UTC) automatically. If multiple terminals are running, choose one under Connection settings.
 
-## Direct SL/TP history (v0.6.0)
+## One-click connection and saved key (v0.7.1)
 
 No EA, script, chart attachment, export, import or helper installation is used.
 
 The app uses MT5’s **built-in local MCP server** to request historical positions directly. This is separate from the Python tick connection.
 
-1. In the signed-in MT5 choose **Tools → Options → MCP**. Enable the internal server and copy its address and API key.
-2. In the replay app connect to MT5 as usual. Expand **Direct MT5 history → Connect direct history**, paste the local address and API key, then connect. Keep the key out of chat.
-3. Load history and select a trade. Matched SL/TP values refresh automatically. The key stays in server memory until reconnection/restart and is cleared from the form after successful authentication. It is never saved or logged.
+1. First use: in the signed-in MT5 choose **Tools → Options → MCP**, enable its internal server and copy the API key.
+2. In the replay app open **Connection settings**, paste the API key once, then click **Connect MT5**. The default local address normally needs no change. Terminal discovery, both connections and loading history are one action.
+3. Select a trade. Subsequent **Connect MT5** clicks reuse the authenticated native client in server memory. Refreshing the browser restores the existing session and reloads trades automatically, without reconnecting either interface.
+
+After authentication the key and endpoint are saved in `.local/native-key.bin` using Windows DPAPI encryption tied to the current Windows user. The plaintext key is cleared from the form and never written to disk or returned by an API. Future server starts automatically reuse it for the same local endpoint. The `.local/` directory is excluded from Git. Use **Connection settings → Forget saved key** to delete the encrypted file and disconnect the native client. Enter a new key to replace the saved one. If Windows cannot decrypt the file, the app asks for the key again. Advanced terminal paths, the terminal picker and the API address are grouped under Connection settings. If authentication fails, trades still load with a clear explanation that complete SL/TP needs the key; settings open automatically.
 
 Only local HTTP endpoints at 127.0.0.1 or localhost are accepted; redirects are refused. The client allows only get_trading_account_info, get_trading_history_positions and get_trading_history_orders. No trading tools are invoked. Account and server must match the Python connection before levels are accepted. Position ID, symbol and opening price must match; malformed, conflicting or unsupported responses fail explicitly. Native zero values mean no corresponding level at close. Historical stop amendments cannot be reconstructed.
 

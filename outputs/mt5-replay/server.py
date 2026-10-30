@@ -13,11 +13,11 @@ from core import Bridge, running_terminals
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 token = secrets.token_urlsafe(32)
-VERSION = '0.6.0'
+VERSION = '0.7.1'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['server.py', 'core.py', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['server.py', 'core.py', 'credentials.py', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -75,6 +75,15 @@ class Handler(BaseHTTPRequestHandler):
                 result = dict(terminals=running_terminals())
             elif self.path == '/api/connect':
                 result = bridge.connect(body.get('path', '').strip())
+            elif self.path == '/api/connect-all':
+                result = bridge.connect_all(body.get('path', '').strip(), body.get('url') or 'http://127.0.0.1:22346/mcp', body.get('key', ''))
+            elif self.path == '/api/session':
+                result = bridge.session_status()
+            elif self.path == '/api/forget-key':
+                bridge.key_store.forget()
+                bridge.direct = None
+                bridge.native_levels = {}
+                result = dict(message='Saved API key removed. Enter a key to reconnect direct history.')
             elif self.path == '/api/history':
                 start = datetime.strptime(body['start'], '%Y-%m-%d').replace(tzinfo=timezone.utc)
                 end = datetime.strptime(body['end'], '%Y-%m-%d').replace(tzinfo=timezone.utc) + timedelta(days=1)

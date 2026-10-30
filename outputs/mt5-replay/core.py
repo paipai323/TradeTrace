@@ -9,6 +9,7 @@ import re
 import math
 import time
 from native_history import NativeHistory, objects
+from credentials import KeyStore
 
 
 def recorded_levels(trade, closing_orders, entry_orders, exit_deals):
@@ -135,6 +136,7 @@ class Bridge:
         self.native_levels = {}
         self.direct = None
         self.direct_synced = 0
+        self.key_store = KeyStore()
 
     def connect(self, path=''):
         self.stage = 'terminal'
@@ -267,7 +269,51 @@ class Bridge:
         client.verify_account(self.account, self.server)
         self.direct = client
         self.direct_synced = 0
-        return self.sync_levels(force=True)
+        result = self.sync_levels(force=True)
+        try:
+            self.key_store.save(url, key)
+            result['key_saved'] = True
+        except (ValueError, OSError):
+            result['key_saved'] = False
+            result['message'] += ' Connected, but the key could not be saved with Windows encryption.'
+        return result
+
+    def connect_all(self, path='', url='http://127.0.0.1:22346/mcp', key=''):
+        previous = self.direct
+        account = self.connect(path)
+        try:
+            if key.strip():
+                native = self.connect_native(url, key)
+            elif previous:
+                previous.verify_account(self.account, self.server)
+                self.direct = previous
+                native = self.sync_levels(force=True)
+            else:
+                saved = self.key_store.load()
+                if saved and saved['url'] == url:
+                    native = self.connect_native(saved['url'], saved['key'])
+                else:
+                    native = dict(state='setup', message='Paste your MT5 API key in Connection settings once. It will be saved with Windows encryption for future starts.', levels=[])
+        except ValueError as error:
+            native = dict(state='waiting', message=str(error), levels=[])
+        return dict(**account, native=native)
+
+    def session_status(self):
+        settings = dict(key_saved=False)
+        try:
+            saved = self.key_store.load()
+            if saved:
+                settings = dict(key_saved=True, native_url=saved['url'])
+        except ValueError as error:
+            settings['key_error'] = str(error)
+        if not self.mt:
+            return dict(connected=False, **settings)
+        try:
+            self.check()
+        except ValueError:
+            return dict(connected=False, **settings)
+        info = self.mt.account_info()
+        return dict(connected=True, currency=info.currency, server=info.server, account=str(info.login), direct=bool(self.direct), **settings)
 
     def sync_levels(self, force=False):
         if not self.direct:

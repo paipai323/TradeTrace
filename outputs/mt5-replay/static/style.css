@@ -11,3 +11,5 @@
 .native-import{margin-top:16px;padding:12px;border:1px solid #33435b;border-radius:8px;font-size:12px;line-height:1.7}.native-import summary{cursor:pointer;color:#b5c9e5}.native-import a{color:#70e4c2}.native-import ol{padding-left:22px}.native-import input{max-width:100%;margin-top:8px}
 
 .native-import label{display:block;margin:12px 0}.native-import input{display:block;width:100%;max-width:520px}.native-import button{margin-top:8px}
+
+#connection-settings{flex-basis:100%;font-size:12px;color:#94a5bd}#connection-settings summary{cursor:pointer;color:#b7cbe5}#connection-settings label{display:block;max-width:600px;margin:12px 0}#connection-settings input,#connection-settings select{display:block;width:100%;max-width:600px;margin-top:7px}.native-import p{margin:0}
