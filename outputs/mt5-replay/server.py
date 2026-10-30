@@ -14,7 +14,7 @@ from core import Bridge, running_terminals
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 token = secrets.token_urlsafe(32)
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
@@ -78,6 +78,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = bridge.journal.overview(body.get('account') or bridge.journal_account)
             elif self.path == '/api/journal/entry':
                 result = bridge.journal.entry(body['account'], str(body['position']))
+            elif self.path == '/api/journal/draft':
+                result = bridge.journal.save_draft(body['account'], str(body['position']), body['review'], body.get('base_updated'))
             elif self.path == '/api/journal/save':
                 result = bridge.journal.save(body['account'], str(body['position']), body['review'])
             elif self.path == '/api/journal/attach':

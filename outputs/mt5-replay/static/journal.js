@@ -2,6 +2,38 @@ let journalModel={accounts:[],account:null,trades:[]}, journalPosition=null, jou
 let journalView='journal', journalDay=null, journalRequest=0, journalSaving=false;
 let journalImageUrls=[];
 let journalRevision=0;
+let journalSavedVersion=null,draftTimer=null;
+let draftSafeRevision=-1,draftSafeSelection=-1;
+const draftIsSafe=()=>draftSafeRevision===journalRevision&&draftSafeSelection===journalRequest;
+const draftPending=new Map(),draftWorkers=new Set();
+const draftKey=(account,position)=>'mt5-journal-draft:'+account+':'+position;
+function reviewFromForm(){
+  const review={notes:$('journal-notes').value,lesson:$('journal-lesson').value,tags:$('journal-tags').value.split(',').map(t=>t.trim()).filter(Boolean),rating:Number($('journal-rating').value),reviewed:$('journal-reviewed').checked,checks:{}};
+  for(const key of ['planned','risk','entry','exit'])review.checks[key]=$('review-'+key).checked;
+  return review;
+}
+function persistDraftLocally(){
+  if(!journalPosition||!journalDirty)return true;
+  try{localStorage.setItem(draftKey(journalModel.account,journalPosition),JSON.stringify({review:reviewFromForm(),updated:new Date().toISOString(),base_updated:journalSavedVersion}));return true;}catch(_){return false;}
+}
+function flushJournalDraft(){
+  clearTimeout(draftTimer);
+  if(!journalPosition||!journalDirty)return;
+  const payload={account:journalModel.account,position:journalPosition,review:reviewFromForm(),base_updated:journalSavedVersion,revision:journalRevision,selection:journalRequest};
+  const key=draftKey(payload.account,payload.position);draftPending.set(key,payload);
+  if(draftWorkers.has(key))return;
+  draftWorkers.add(key);
+  (async()=>{
+    while(draftPending.has(key)){
+      const next=draftPending.get(key);draftPending.delete(key);
+      try{
+        await api('journal/draft',next);
+        if(next.account===journalModel.account&&next.position===journalPosition&&next.selection===journalRequest&&next.revision===journalRevision&&journalDirty){draftSafeRevision=journalRevision;draftSafeSelection=journalRequest;$('journal-save-status').textContent='Draft saved automatically · click Save review to finalize';}
+      }catch(error){if(next.account===journalModel.account&&next.position===journalPosition&&next.selection===journalRequest&&journalDirty&&!journalSaving)$('journal-save-status').textContent='Draft kept in browser · '+error.message;}
+    }
+    draftWorkers.delete(key);
+  })();
+}
 const replayPlayer=document.querySelector('.player');
 for(const button of replayPlayer.querySelectorAll('button'))button.type='button';
 let inlineReplay=false;
@@ -48,7 +80,7 @@ function journalDate(ms){
 let journalMonth=journalDate(Date.now()).slice(0,7);
 const journalCurrency=()=>journalModel.accounts.find(account=>account.id===journalModel.account)?.currency||'';
 const element=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
-function allowJournalSwitch(){return !journalDirty||confirm('Discard unsaved review changes? Choose Cancel to save them first.');}
+function allowJournalSwitch(){if(!journalDirty)return true;if(persistDraftLocally()||draftIsSafe()){flushJournalDraft();return true;}return confirm('Could not preserve this draft locally. Discard changes? Choose Cancel to save them first.');}
 function showJournalView(view){
   if(view==='calendar'&&journalView!=='calendar'){
     if(!allowJournalSwitch())return;
@@ -106,7 +138,8 @@ function renderJournal(){
   if(!shown.length)$('journal-trades').append(element('p',journalModel.trades.length?'No trades match these filters.':'No saved trades yet. Connect MT5 and load your history.','journal-hint'));
   for(const trade of shown){
     const result=outcome(trade.net),button=element('button',undefined,'journal-row '+(journalPosition===trade.id?'active':''));
-    button.append(element('strong',`${trade.symbol} · ${trade.side}`),element('span',money(trade.net,trade.currency),result.style),element('small',`${journalDate(trade.end)} · ${trade.review?.reviewed?'Reviewed':'Needs review'}`));
+    let hasDraft=trade.has_draft;try{hasDraft=hasDraft||Boolean(localStorage.getItem(draftKey(journalModel.account,trade.id)));}catch(_){}
+    button.append(element('strong',`${trade.symbol} · ${trade.side}`),element('span',money(trade.net,trade.currency),result.style),element('small',`${journalDate(trade.end)} · ${hasDraft?'Draft':trade.review?.reviewed?'Reviewed':'Needs review'}`));
     if(trade.review?.tags?.length)button.append(element('small',trade.review.tags.join(' · '),'setup-tags'));
     button.onclick=()=>openJournalTrade(trade.id);$('journal-trades').append(button);
   }
@@ -138,7 +171,10 @@ async function openJournalTrade(position){
     if(position!==journalPosition)closeInlineReplay();
     journalPosition=position;journalDirty=false;journalRevision=0;
     $('journal-replay-status').textContent='';
-    const trade=entry.trade,review=entry.review||{};
+    journalSavedVersion=entry.updated||null;
+    let draft=entry.draft&&entry.draft.base_updated===journalSavedVersion?entry.draft:null;
+    try{const local=JSON.parse(localStorage.getItem(draftKey(account,position)));if(local?.base_updated===journalSavedVersion&&typeof local.review?.notes==='string'&&(!draft||local.updated>draft.updated))draft=local;}catch(_){}
+    const trade=entry.trade,review=draft?draft.review:entry.review||{};
     $('journal-empty').hidden=true;$('journal-form').hidden=false;
     $('journal-title').textContent=`${trade.symbol} / ${trade.side}`;
     $('journal-trade-details').textContent=`#${trade.id} · ${trade.volume} lots · ${journalDate(trade.end)} · Exit: ${trade.reason}`;
@@ -147,23 +183,24 @@ async function openJournalTrade(position){
     $('journal-tags').value=(review.tags||[]).join(', ');$('journal-notes').value=review.notes||'';$('journal-lesson').value=review.lesson||'';
     $('journal-rating').value=review.rating||0;$('journal-reviewed').checked=Boolean(review.reviewed);
     for(const key of ['planned','risk','entry','exit'])$('review-'+key).checked=Boolean(review.checks?.[key]);
-    $('journal-save-status').textContent=entry.updated?'Saved '+new Date(entry.updated).toLocaleString():'No review saved yet';
+    journalDirty=Boolean(draft);
+    $('journal-save-status').textContent=draft?'Draft restored · click Save review to finalize':entry.updated?'Saved '+new Date(entry.updated).toLocaleString():'No review saved yet';
+    if(draft){persistDraftLocally();draftTimer=setTimeout(flushJournalDraft,800);}
     renderJournal();updateReplayActions();await renderJournalImages(entry.images,account,position);
   }catch(error){status(error.message);}
 }
-$('journal-form').addEventListener('input',event=>{if(event.target.id==='journal-upload'||replayPlayer.contains(event.target))return;journalDirty=true;journalRevision++;$('journal-save-status').textContent='Unsaved changes';});
+$('journal-form').addEventListener('input',event=>{if(event.target.id==='journal-upload'||replayPlayer.contains(event.target))return;journalDirty=true;journalRevision++;$('journal-save-status').textContent=persistDraftLocally()?'Saving draft…':'Saving draft to journal…';clearTimeout(draftTimer);draftTimer=setTimeout(flushJournalDraft,800);});
 $('journal-form').onsubmit=async event=>{
   event.preventDefault();if(journalSaving||!journalPosition)return;
   journalSaving=true;$('journal-save').disabled=true;
   const account=journalModel.account,position=journalPosition,revision=journalRevision;
-  const review={notes:$('journal-notes').value,lesson:$('journal-lesson').value,tags:$('journal-tags').value.split(',').map(t=>t.trim()).filter(Boolean),rating:Number($('journal-rating').value),reviewed:$('journal-reviewed').checked,checks:{}};
-  for(const key of ['planned','risk','entry','exit'])review.checks[key]=$('review-'+key).checked;
+  const review=reviewFromForm();clearTimeout(draftTimer);draftPending.delete(draftKey(account,position));
   try{
     const result=await api('journal/save',{account,position,review});
-    if(account===journalModel.account&&position===journalPosition){journalDirty=journalRevision!==revision;$('journal-save-status').textContent=journalDirty?'Saved previous version · new changes are unsaved':'Saved '+new Date(result.updated).toLocaleTimeString();}
+    if(account===journalModel.account&&position===journalPosition){journalSavedVersion=result.updated;journalDirty=journalRevision!==revision;if(!journalDirty)localStorage.removeItem(draftKey(account,position));else persistDraftLocally();$('journal-save-status').textContent=journalDirty?'Saved previous version · saving new draft…':'Saved '+new Date(result.updated).toLocaleTimeString();}
     if(account===journalModel.account)await refreshJournal(account);
   }catch(error){$('journal-save-status').textContent=error.message;}
-  finally{journalSaving=false;$('journal-save').disabled=false;}
+  finally{journalSaving=false;$('journal-save').disabled=false;if(journalDirty)draftTimer=setTimeout(flushJournalDraft,800);}
 };
 async function renderJournalImages(images,account,position){
   if($('screenshot-viewer').open)$('screenshot-viewer').close();
@@ -277,5 +314,5 @@ $('journal-backup').onclick=async()=>{
     const url=URL.createObjectURL(await response.blob()),link=element('a');link.href=url;link.download='MT5-Journal-'+new Date().toISOString().slice(0,10)+'.sqlite3';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);status('Journal backup downloaded. It includes reviews and screenshots, not your API key.');
   }catch(error){status(error.message);}
 };
-window.addEventListener('beforeunload',event=>{if(journalDirty){event.preventDefault();event.returnValue='';}});
+window.addEventListener('beforeunload',event=>{if(journalDirty&&!persistDraftLocally()&&!draftIsSafe()){event.preventDefault();event.returnValue='';}});
 refreshJournal().catch(error=>status(error.message));

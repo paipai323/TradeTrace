@@ -31,6 +31,9 @@ class Journal:
             id TEXT PRIMARY KEY, account TEXT NOT NULL, position TEXT NOT NULL,
             name TEXT NOT NULL, mime TEXT NOT NULL, content BLOB NOT NULL,
             FOREIGN KEY(account,position) REFERENCES trades(account,position));
+          CREATE TABLE IF NOT EXISTS drafts (
+            account TEXT NOT NULL, position TEXT NOT NULL, review TEXT NOT NULL, updated TEXT NOT NULL, base_updated TEXT,
+            PRIMARY KEY(account,position), FOREIGN KEY(account,position) REFERENCES trades(account,position));
           CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY,value TEXT);
         ''')
         try:
@@ -61,8 +64,9 @@ class Journal:
             if account and not any(row['id'] == account for row in accounts):
                 raise ValueError('This journal account does not exist.')
             trades = []
+            drafts={row['position'] for row in con.execute('SELECT position FROM drafts WHERE account=?',(account,))}
             for row in con.execute('SELECT * FROM trades WHERE account=?', (account,)):
-                trades.append(dict(**json.loads(row['snapshot']), review=json.loads(row['review']), updated=row['updated']))
+                trades.append(dict(**json.loads(row['snapshot']), review=json.loads(row['review']), updated=row['updated'],has_draft=row['position'] in drafts))
             trades.sort(key=lambda t:t['end'], reverse=True)
         return dict(account=account, accounts=accounts, trades=trades)
 
@@ -72,9 +76,11 @@ class Journal:
             if not row:
                 raise ValueError('Trade not found in this journal account. Sync MT5 history first.')
             images = [dict(image) for image in con.execute('SELECT id,name,mime FROM images WHERE account=? AND position=?', (account,position))]
-            return dict(trade=json.loads(row['snapshot']), review=json.loads(row['review']), updated=row['updated'], images=images)
+            draft=con.execute('SELECT review,updated,base_updated FROM drafts WHERE account=? AND position=?',(account,position)).fetchone()
+            saved_draft=dict(review=json.loads(draft['review']),updated=draft['updated'],base_updated=draft['base_updated']) if draft else None
+            return dict(trade=json.loads(row['snapshot']), review=json.loads(row['review']), updated=row['updated'], images=images,draft=saved_draft)
 
-    def save(self, account, position, review):
+    def clean_review(self, review):
         if not isinstance(review, dict):
             raise ValueError('Invalid journal review.')
         notes = review.get('notes', '')
@@ -92,13 +98,32 @@ class Journal:
             raise ValueError('Choose a process rating from 0 to 5.')
         clean = dict(notes=notes, lesson=lesson, tags=list(dict.fromkeys(tag.strip() for tag in tags if tag.strip())),
                      checks=checks, rating=rating, reviewed=review.get('reviewed',False))
+        return clean
+
+    def save(self, account, position, review):
+        clean=self.clean_review(review)
         updated = datetime.now(timezone.utc).isoformat()
         with self.db() as con:
             result = con.execute('UPDATE trades SET review=?,updated=? WHERE account=? AND position=?',
                 (json.dumps(clean), updated, account, position))
             if result.rowcount != 1:
                 raise ValueError('Trade not found in this journal account.')
+            con.execute('DELETE FROM drafts WHERE account=? AND position=?',(account,position))
         return dict(review=clean, updated=updated)
+
+    def save_draft(self, account, position, review, base_updated=None):
+        clean=self.clean_review(review)
+        updated=datetime.now(timezone.utc).isoformat()
+        with self.db() as con:
+            row=con.execute('SELECT updated FROM trades WHERE account=? AND position=?',(account,position)).fetchone()
+            if not row:
+                raise ValueError('Trade not found in this journal account.')
+            if row['updated'] != base_updated:
+                raise ValueError('The saved review changed. Reopen the trade before replacing its draft.')
+            con.execute('''INSERT INTO drafts VALUES (?,?,?,?,?) ON CONFLICT(account,position)
+                DO UPDATE SET review=excluded.review,updated=excluded.updated,base_updated=excluded.base_updated''',
+                (account,position,json.dumps(clean),updated,base_updated))
+        return dict(updated=updated)
 
     def attach(self, account, position, name, data):
         try:

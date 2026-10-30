@@ -29,5 +29,10 @@ class JournalApiTests(unittest.TestCase):
             self.assertEqual(result['account'],account)
             self.assertEqual(post('/api/journal/save',dict(account=account,position='77',review={'notes':'Retest entry'}))[0],200)
             self.assertEqual(post('/api/journal/entry',dict(account=account,position='77'))[1]['review']['notes'],'Retest entry')
+            entry=post('/api/journal/entry',dict(account=account,position='77'))[1]
+            self.assertEqual(post('/api/journal/draft',dict(account=account,position='77',review={'notes':'Unfinished'},base_updated=entry['updated']))[0],200)
+            draft_entry=post('/api/journal/entry',dict(account=account,position='77'))[1]
+            self.assertEqual(draft_entry['review']['notes'],'Retest entry')
+            self.assertEqual(draft_entry['draft']['review']['notes'],'Unfinished')
             self.assertEqual(post('/api/journal/overview',{},token='wrong')[0],403)
             self.assertEqual(post('/api/journal/save',dict(account=account,position='missing',review={}))[0],400)

@@ -7,6 +7,20 @@ from journal import Journal
 
 
 class JournalTests(unittest.TestCase):
+    def test_draft_survives_restart_without_marking_review_completed(self):
+        draft=dict(notes='Unfinished review',tags=['breakout'],reviewed=True)
+        self.journal.save_draft(self.account,'77',draft)
+        entry=Journal(self.path).entry(self.account,'77')
+        self.assertEqual(entry['draft']['review']['notes'],'Unfinished review')
+        self.assertEqual(entry['review'],{})
+        self.assertTrue(self.journal.overview()['trades'][0]['has_draft'])
+        saved=self.journal.save(self.account,'77',draft)
+        self.assertIsNone(self.journal.entry(self.account,'77')['draft'])
+        with self.assertRaisesRegex(ValueError,'changed'):
+            self.journal.save_draft(self.account,'77',dict(notes='Late autosave'),base_updated=None)
+        self.journal.save_draft(self.account,'77',dict(notes='New draft'),base_updated=saved['updated'])
+        self.assertEqual(self.journal.entry(self.account,'77')['draft']['review']['notes'],'New draft')
+
     def setUp(self):
         self.folder=tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.path=Path(self.folder.name)/'journal.sqlite3'
