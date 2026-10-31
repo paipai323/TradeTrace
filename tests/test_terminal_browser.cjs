@@ -13,7 +13,7 @@ let browser;
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Test server timeout')),15000);server.stdout.on('data',chunk=>{if(chunk.toString().includes('http://')){clearTimeout(timer);resolve();}});server.on('error',reject);server.stderr.on('data',chunk=>process.stderr.write(chunk));});
   const executablePath=['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find(p=>fs.existsSync(p));
   browser=await playwright.chromium.launch({headless:true,...(executablePath?{executablePath}:{}),args:['--disable-gpu']});
-  const page=await browser.newPage({viewport:{width:1536,height:1100}}),errors=[];let previews=0,submissions=0,planRequests=0,planDelay=0;
+  const page=await browser.newPage({viewport:{width:1536,height:1100}}),errors=[];let previews=0,submissions=0,planRequests=0,planDelay=0,positionClosed=false,pendingExists=false,pendingSnapshot=null,pendingModification=null;
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/api/**',async route=>{
     const request=route.request(),endpoint=new URL(request.url()).pathname,body=request.postDataJSON()||{};
@@ -22,11 +22,14 @@ let browser;
     else if(endpoint==='/api/journal/overview')value={accounts:[],account:null,trades:[]};
     else if(endpoint==='/api/connect')value={account:'123',server:'Test-Demo',currency:'USD'};
     else if(endpoint==='/api/terminal/symbols')value={symbols:['EURUSD','GBPUSD','XAUUSD'],visible:['EURUSD','GBPUSD'],account:'123',server:'Test-Demo',currency:'USD',demo:true};
-    else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo:true,positions:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,sl:1.09,tp:1.12,profit:20}]};
+    else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo:true,orders:pendingExists?[pendingSnapshot]:[],positions:positionClosed?[]:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,sl:1.09,tp:1.12,profit:20}]};
     else if(endpoint==='/api/terminal/quotes')value={account:'123',server:'Test-Demo',quotes:Object.fromEntries(body.symbols.map(s=>[s,{bid:1.103,ask:1.1031,time:Date.now()/1000}]))};
     else if(endpoint==='/api/terminal/plan'){planRequests++;if(planDelay)await new Promise(resolve=>setTimeout(resolve,planDelay));value={account:'123',server:'Test-Demo',currency:'USD',risk:12.5,reward:25,mark_to_market:3,quote_time:Date.now()/1000,note:'Mock gross estimate; no trade placed'};}
-    else if(endpoint==='/api/terminal/preview'){previews++;await new Promise(resolve=>setTimeout(resolve,250));value={preview:'test-token',expires_in:60,account:'123',server:'Test-Demo',request:{symbol:body.symbol,volume:Number(body.volume),price:1.1031,sl:0,tp:0}};}
-    else if(endpoint==='/api/terminal/submit'){submissions++;value={retcode:10009,comment:'Mocked execution',order:'99',deal:'100',volume:.01,price:1.1031,message:'Test only'};}
+    else if(endpoint==='/api/terminal/modify-preview'){pendingModification={price:Number(body.price),sl:Number(body.sl),tp:Number(body.tp)};value={preview:'mock-modify-token',expires_in:60,account:'123',server:'Test-Demo',request:{order:88,symbol:'EURUSD',...pendingModification}};}
+    else if(endpoint==='/api/terminal/cancel-preview')value={preview:'mock-cancel-token',expires_in:60,account:'123',server:'Test-Demo',request:{order:88,symbol:'EURUSD',action:8}};
+    else if(endpoint==='/api/terminal/close-preview')value={preview:'mock-close-token',expires_in:60,account:'123',server:'Test-Demo',request:{position:42,symbol:'EURUSD',volume:.01,price:1.103,type:1}};
+    else if(endpoint==='/api/terminal/preview'){previews++;await new Promise(resolve=>setTimeout(resolve,250));const pending=body.order_kind&&body.order_kind!=='MARKET',kind=body.order_kind==='PENDING'?(body.side==='BUY'?(Number(body.price)<1.1031?'LIMIT':'STOP'):(Number(body.price)>1.103?'LIMIT':'STOP')):body.order_kind;if(pending)pendingSnapshot={ticket:'88',symbol:body.symbol,type:body.side==='BUY'?(kind==='LIMIT'?2:4):(kind==='LIMIT'?3:5),volume:Number(body.volume),price:Number(body.price),sl:Number(body.sl),tp:Number(body.tp)};value={preview:pending?'mock-pending-token':'test-token',order_kind:kind,expires_in:60,account:'123',server:'Test-Demo',request:{symbol:body.symbol,volume:Number(body.volume),price:pending?Number(body.price):1.1031,sl:Number(body.sl)||0,tp:Number(body.tp)||0}};}
+    else if(endpoint==='/api/terminal/submit'){submissions++;if(body.preview==='mock-modify-token'){pendingSnapshot={...pendingSnapshot,...pendingModification};value={retcode:10009,comment:'Mocked amendment',order:'88',deal:'0',volume:0,price:0,operation:'modify',message:'Test only'};}else if(body.preview==='mock-cancel-token'){pendingExists=false;value={retcode:10009,comment:'Mocked cancellation',order:'88',deal:'0',volume:0,price:0,operation:'cancel',message:'Test only'};}else if(body.preview==='mock-pending-token'){pendingExists=true;value={retcode:10008,comment:'Mocked pending accepted',order:'88',deal:'0',volume:0,price:0,operation:'pending',message:'Test only'};}else if(body.preview==='mock-close-token'){positionClosed=true;value={retcode:10009,comment:'Mocked closure',order:'101',deal:'102',volume:.01,price:1.103,operation:'close',remaining_volume:0,message:'Test only'};}else value={retcode:10009,comment:'Mocked execution',order:'99',deal:'100',volume:.01,price:1.1031,message:'Test only'};}
     else return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Not available in isolated browser test'})});
     await route.fulfill({contentType:'application/json',body:JSON.stringify(value)});
   });
@@ -203,6 +206,43 @@ let browser;
   assert.ok(toolBounds.y+toolBounds.height<=footerBounds.y+1,'toolbar stays above the chart footer');
   assert.ok(clearBounds.y+clearBounds.height<=toolBounds.y+toolBounds.height+1,'last drawing tool is reachable inside the scroll area');
   await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-short-chart.png')});
+  await page.locator('.terminal-close-action[data-position="42"]').click();
+  await page.locator('#terminal-close-confirm').waitFor();
+  assert.equal(submissions,1,'reviewing closure does not send an order');
+  assert.ok((await page.locator('#terminal-close-summary').textContent()).includes('#42'));
+  await page.locator('#terminal-close-cancel').click();assert.equal(submissions,1,'cancel does not close a position');
+  await page.locator('.terminal-close-action[data-position="42"]').click();await page.locator('#terminal-close-confirm').click();
+  await page.locator('#terminal-close-status').filter({hasText:'Mocked closure'}).waitFor();
+  await page.waitForFunction(()=>document.getElementById('terminal-position-count').textContent==='0');
+  assert.equal(submissions,2,'closure is submitted once after explicit confirmation');
+  assert.ok((await page.locator('#terminal-close-status').textContent()).includes('Remaining open volume: 0'));
+  await page.locator('[data-ticket-mode="PENDING"]').click();await page.locator('#terminal-side').selectOption('BUY');
+  await page.locator('#terminal-volume').fill('0.01');
+  const pickDraft=async(button,y)=>{await page.locator('#terminal-'+button).click();await page.locator('#terminal-chart').click({position:{x:300,y}});};
+  const dragDraft=async(y1,y2)=>{await page.locator('#terminal-chart').scrollIntoViewIfNeeded();const rect=await page.locator('#terminal-chart').boundingBox();await page.mouse.move(rect.x+300,rect.y+y1);await page.mouse.down();await page.mouse.move(rect.x+300,rect.y+y2,{steps:6});await page.mouse.up();};
+  await pickDraft('pick-entry',200);const beforeEntry=Number(await page.locator('#terminal-order-price').inputValue());await dragDraft(200,230);assert.ok(Number(await page.locator('#terminal-order-price').inputValue())<beforeEntry,'entry draft drags on chart');
+  await pickDraft('pick-sl',270);const beforeSL=Number(await page.locator('#terminal-sl').inputValue());await dragDraft(270,290);assert.ok(Number(await page.locator('#terminal-sl').inputValue())<beforeSL,'SL draft drags on chart');
+  await pickDraft('pick-tp',120);const beforeTP=Number(await page.locator('#terminal-tp').inputValue());await dragDraft(120,100);assert.ok(Number(await page.locator('#terminal-tp').inputValue())>beforeTP,'TP draft drags on chart');
+  await page.locator('#terminal-side').selectOption('SELL');assert.ok((await page.locator('#terminal-order-hint').textContent()).includes('SELL STOP'),'sell below quote infers stop');
+  await page.locator('#terminal-side').selectOption('BUY');assert.ok((await page.locator('#terminal-order-hint').textContent()).includes('BUY LIMIT'),'buy below quote infers limit');assert.equal(submissions,2,'dragging sends no orders');
+  await page.locator('#terminal-preview').click();await page.locator('#terminal-submit').waitFor();
+  assert.ok((await page.locator('#terminal-order-summary').textContent()).includes('BUY LIMIT'));
+  assert.ok((await page.locator('#terminal-order-summary').textContent()).includes('entry '+Number(await page.locator('#terminal-order-price').inputValue())));
+  assert.equal(submissions,2,'pending review does not submit');
+  await page.locator('#terminal-submit').click();await page.locator('#terminal-order-summary').filter({hasText:'Pending order 88'}).waitFor();
+  await page.locator('.terminal-cancel-action[data-order="88"]').waitFor();assert.equal(submissions,3);
+  const previousBrokerEntry=pendingSnapshot.price;
+  await dragDraft(230,210);
+  await page.locator('#terminal-ticket-editing').waitFor();assert.ok((await page.locator('#terminal-ticket-editing').textContent()).includes('#88'),'dragging broker entry stages an amendment');
+  await pickDraft('pick-entry',190);
+  assert.equal(submissions,3,'editing an existing pending entry is only staged');assert.equal(pendingSnapshot.price,previousBrokerEntry);
+  await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-pending-drag.png')});
+  await page.locator('#terminal-preview').click();await page.locator('#terminal-submit').waitFor();assert.ok((await page.locator('#terminal-order-summary').textContent()).includes('AMEND pending #88'));
+  await page.locator('#terminal-submit').click();await page.locator('#terminal-order-summary').filter({hasText:'Pending amendment result'}).waitFor();assert.equal(submissions,4);assert.notEqual(pendingSnapshot.price,previousBrokerEntry);
+  await page.locator('.terminal-cancel-action[data-order="88"]').click();await page.locator('#terminal-close-confirm').waitFor();
+  assert.ok((await page.locator('#terminal-close-summary').textContent()).includes('Cancel pending #88'));assert.equal(submissions,4,'cancellation review does not submit');
+  await page.locator('#terminal-close-confirm').click();await page.locator('#terminal-close-status').filter({hasText:'Mocked cancellation'}).waitFor();
+  await page.waitForFunction(()=>document.getElementById('terminal-pending-count').textContent==='0');assert.equal(submissions,5,'pending cancellation submits once');
   await page.locator('#terminal-journal').click();assert.equal(await page.locator('#journal-pane').isVisible(),true);
   assert.deepEqual(errors,[]);console.log('Terminal browser tests passed (mock broker; no real trades)');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{await browser?.close();server.kill();});

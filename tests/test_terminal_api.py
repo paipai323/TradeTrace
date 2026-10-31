@@ -24,6 +24,18 @@ class TerminalApiTests(unittest.TestCase):
                 self.assertEqual(self.post('/api/terminal/'+route,{'symbol':'EURUSD'}),(200,{'route':route}))
                 self.assertEqual(self.post('/api/terminal/'+route,{},token='wrong')[0],403)
                 getattr(terminal,route).assert_called_once()
+            terminal.close_preview.return_value={'preview':'close-token'}
+            self.assertEqual(self.post('/api/terminal/close-preview',{'position':'42'}),(200,{'preview':'close-token'}))
+            self.assertEqual(self.post('/api/terminal/close-preview',{'position':'42'},token='wrong')[0],403)
+            terminal.close_preview.assert_called_once_with({'position':'42'})
+            terminal.cancel_preview.return_value={'preview':'cancel-token'}
+            self.assertEqual(self.post('/api/terminal/cancel-preview',{'order':'88'}),(200,{'preview':'cancel-token'}))
+            self.assertEqual(self.post('/api/terminal/cancel-preview',{'order':'88'},token='wrong')[0],403)
+            terminal.cancel_preview.assert_called_once_with({'order':'88'})
+            terminal.modify_preview.return_value={'preview':'modify-token'}
+            self.assertEqual(self.post('/api/terminal/modify-preview',{'order':'88'}),(200,{'preview':'modify-token'}))
+            self.assertEqual(self.post('/api/terminal/modify-preview',{'order':'88'},token='wrong')[0],403)
+            terminal.modify_preview.assert_called_once_with({'order':'88'})
 
     def test_index_composes_terminal_template_and_serves_pinned_local_library(self):
         for path in ('/','/terminal-analysis.js','/vendor/lightweight-charts-5.0.9.js'):

@@ -16,7 +16,7 @@ ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 terminal = Terminal(bridge)
 token = secrets.token_urlsafe(32)
-VERSION = '1.10.0'
+VERSION = '1.13.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
@@ -93,6 +93,12 @@ class Handler(BaseHTTPRequestHandler):
                 result = terminal.plan(body)
             elif self.path == '/api/terminal/preview':
                 result = terminal.preview(body)
+            elif self.path == '/api/terminal/close-preview':
+                result = terminal.close_preview(body)
+            elif self.path == '/api/terminal/cancel-preview':
+                result = terminal.cancel_preview(body)
+            elif self.path == '/api/terminal/modify-preview':
+                result = terminal.modify_preview(body)
             elif self.path == '/api/terminal/submit':
                 result = terminal.submit(body)
             elif self.path == '/api/journal/overview':

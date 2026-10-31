@@ -13,7 +13,7 @@ saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
 
-## Market workspace (v1.10.0)
+## Market workspace (v1.13.0)
 
 Open **Terminal → Connect & load markets**. This connects to your running MT5
 terminal and loads symbols in one step; the native MCP history API key is not
@@ -100,13 +100,51 @@ restricted to demo accounts on the backend.
   60-second preview; inputs changed during review invalidate confirmation. Quotes
   and broker checks are refreshed before submission. Unknown outcomes are never
   retried automatically. Final execution must be checked in MT5.
+- **Market / Pending** tabs choose execution mode. In Pending mode, enter an
+  entry price and choose BUY or SELL; limit vs stop is inferred automatically:
+  buy below ask = limit, buy above ask = stop, sell above bid = limit, sell below
+  bid = stop. The ticket and review name the inferred type. The backend resolves
+  and freezes that type at review, then revalidates it before sending; it will
+  not silently switch type if quotes cross the entry during confirmation.
+  Orders use GTC and RETURN filling, subject to broker validation.
+- Use **Set entry / SL / TP on chart**, then click a price, or type exact prices.
+  **Show draft levels on chart** displays draggable lines with right-edge handles.
+  Dragging updates the ticket, snaps prices to the symbol tick size and invalidates
+  any old preview. It sends no broker request. Entry, SL and TP drafts can be
+  dragged in empty future space too. A selected drawing's handles retain priority
+  when it overlaps a ticket line. Escape cancels an in-progress drag or price pick.
+- On an existing pending order, use **Edit** or drag its entry/SL/TP line to stage
+  an amendment. The ticket locks side and volume and requires **Review pending
+  amendment**, then explicit confirmation. The backend preserves the ticket,
+  broker order type and original expiration, and rejects a filled or concurrently
+  changed order. Existing orders cannot be changed from limit to stop by crossing
+  the quote; this requires cancelling and placing a new order explicitly. After
+  placement, the old draft clears so dragging the broker line edits that order
+  instead of accidentally preparing a second one. Live execution remains disabled.
+- The **Pending orders** table shows broker tickets, types, remaining lots, entry
+  and SL/TP, with entry lines on the current symbol chart. **Cancel** opens an
+  account/ticket-specific review; confirming sends `TRADE_ACTION_REMOVE` once.
+  An order that fills before cancellation is rejected as no longer pending;
+  inspect open positions. Both placement and cancellation are demo-account only.
+  When the ticket is in pending mode, copying a chart plan also copies its entry;
+  market mode continues to use current broker pricing.
+- **Close** on an open-position row reviews closing its entire volume. The review
+  shows the exact ticket, symbol, account, volume and current closing quote; a
+  separate **Confirm close entire position** sends the request. Only demo accounts
+  can use this action. Cancel, expiration or changes to the position invalidate
+  the review. The backend names the exact MT5 position ticket, reverses its side,
+  refreshes broker checks before sending and rejects changed volume/type/symbol.
+  A review can only be submitted once. Results report broker status and remaining
+  volume when available; partial fills, timeouts and unknown outcomes are never
+  retried automatically. Use MT5 History/positions for final confirmation and
+  **Sync closed trades to journal** to import completed positions.
 - Open positions and their entry/SL/TP references appear on the chart. **Open
   journal** filters your journal to the current symbol. **Sync closed trades to
   journal** uses the history From/To dates in Trade replay; existing review and
   attachment behavior is preserved.
 
 This version does not implement Pine Script, community indicators, multiple chart
-windows, pending orders, closing/modifying positions, or draggable trading levels.
+windows, modifying open positions, stop-limit orders, or automatic cancel-and-replace.
 Manage those trading operations in MT5. No real trades are placed by the tests.
 See `THIRD_PARTY_NOTICES.md` for the chart library's separate Apache 2.0 license.
 
