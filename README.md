@@ -53,6 +53,14 @@ References: [MT5 MCP configuration](https://www.metatrader5.com/en/terminal/help
 
 ## Replay
 
+Replay continues for **1 hour after exit** by default. Use **After exit** to choose
+None, 15 minutes, 1 hour, 4 hours, or 1 day; the window reloads automatically.
+**Jump to exit** takes you to the recorded close. A marked exit and an
+**After exit · position closed** label distinguish later price action from the
+actual trade. Final net P&L remains the recorded result; price movement after exit
+is only a market comparison. Exit chart captures still end at the recorded close.
+After-exit quotes depend on broker coverage and elapsed market time.
+
 Choose a candle timeframe and select a trade. By default, the app loads up to 80 completed pre-entry candles automatically, with an extra lookback buffer for weekends and market closures. If fewer candles are available, the app reports the shortfall. Manual windows (15 minutes through 1 week) remain under **History & data settings**. Select **Candle timeframe** to use M1, M5, M15, M30, H1 or H4 for pre-entry history. Changing it reloads automatically while preserving replay time and chart zoom. After entry, bid-price candles at the selected timeframe build from already-revealed ticks, including a partial entry/exit candle; no future highs/lows are shown. The blue dot marks the current closing-side quote (bid for buys, ask for sells). Larger candle periods may require a longer history window. Only fully closed candles are shown before the entry marker; the entry-containing candle is excluded to avoid revealing post-entry OHLC. Playback starts at the first available tick at or after entry and reveals bid/ask ticks. The closing quote includes its exact UTC timestamp. Scrubbing before the first tick shows the first-quote time and a jump button; prices are never backfilled from the future. Scroll over the chart or use +/− to zoom, drag to pan, and use **Fit trade** to focus on entry-to-exit or **All history** to restore context. Arrow keys pan, +/− zoom, and Home resets when the chart has focus. Navigation changes only the chart viewport, not playback time or future-price visibility; exit captures always include the full historical window. The horizontal axis shows spaced UTC timestamps and adds month/day labels for ranges spanning multiple dates. Buys close against bid, sells against ask. SL/TP lines are labeled with their sources and serve as historical references throughout replay. Missing ticks and context are flagged; no invented prices are substituted.
 
 The list and replay show green WIN, red LOSS or neutral BREAK EVEN based on recorded net profit, including linked commissions/swaps/fees. Running movement is in price units, not floating account currency. Final outcomes remain visible immediately. The exit reason comes from the recorded deal, not a price comparison. Expand the trade verification panel to reread executions and compare tickets, prices and charges with MT5 History.

@@ -276,7 +276,7 @@ async function ensureJournalReplay(){
   if(!account||account.login!==window.journalConnectedAccount?.account||account.server!==window.journalConnectedAccount?.server)throw Error('Connect MT5 to this journal account to replay its trades.');
   $('journal-replay-status').textContent='Loading historical prices…';
   if(!replayMatchesJournal()){
-    const response=await api('replay',{id:position,context_minutes:historyRequest(),candle_timeframe:$('candle-timeframe').value});
+    const response=await api('replay',{id:position,context_minutes:historyRequest(),candle_timeframe:$('candle-timeframe').value,after_minutes:Number($('after-minutes').value)});
     if(position!==journalPosition||sourceAccount!==journalModel.account)return false;
     setData(response);
   }
@@ -298,7 +298,7 @@ $('journal-capture-exit').onclick=()=>task(async()=>{
   try {
     if(!await ensureJournalReplay())return;
     const chart=document.createElement('canvas');
-    draw({canvas:chart,width:1400,height:520,time:data.trade.end,index:data.points.length-1});
+    draw({canvas:chart,width:1400,height:520,time:data.trade.end,end:data.trade.end,index:data.points.length-1});
     const screenshot=document.createElement('canvas');screenshot.width=1400;screenshot.height=630;
     const ctx=screenshot.getContext('2d'),trade=data.trade;
     ctx.fillStyle='#0e1725';ctx.fillRect(0,0,1400,630);ctx.fillStyle='#e8eef8';ctx.font='bold 23px Segoe UI';

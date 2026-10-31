@@ -198,7 +198,7 @@ class Bridge:
         self.journal_account = self.journal.sync(self.account, self.server, self.mt.account_info().currency, trades)
         return dict(trades=trades, skipped=skipped)
 
-    def replay(self, pid, context_minutes='auto', candle_timeframe='M1'):
+    def replay(self, pid, context_minutes='auto', candle_timeframe='M1', after_minutes=60):
         self.stage = 'account'
         self.check()
         self.stage = 'ticks'
@@ -209,6 +209,8 @@ class Bridge:
         if candle_timeframe not in durations:
             raise ValueError('Choose M1, M5, M15, M30, H1 or H4 candles.')
         candle_ms=durations[candle_timeframe]*1000
+        if after_minutes not in (0, 15, 60, 240, 1440):
+            raise ValueError('Choose an after-exit period from the menu.')
         if pid not in self.trades:
             if not pid.isdigit():
                 raise ValueError('Invalid position ID.')
@@ -239,7 +241,8 @@ class Bridge:
                 trade[level] = native[level]
                 trade[level + '_source'] = 'direct MT5 position history' if native[level] else 'not set at close (direct MT5)'
         points = []
-        cursor, end = utc(trade['start']), utc(trade['end'])
+        replay_end = max(trade['end'], min(trade['end'] + after_minutes * 60000, int(time.time() * 1000)))
+        cursor, end = utc(trade['start']), utc(replay_end)
         while cursor <= end:
             stop = min(cursor + timedelta(hours=1), end)
             ticks = mt.copy_ticks_range(trade['symbol'], cursor, stop, mt.COPY_TICKS_ALL)
@@ -247,7 +250,7 @@ class Bridge:
                 for t in ticks:
                     ts = int(t['time_msc'])
                     bid, ask = float(t['bid']), float(t['ask'])
-                    if trade['start'] <= ts <= trade['end'] and bid > 0 and ask > 0:
+                    if max(trade['start'], int(cursor.timestamp()*1000)) <= ts <= min(replay_end, int(stop.timestamp()*1000)) and bid > 0 and ask > 0:
                         point = [ts, bid, ask]
                         if not points or point != points[-1]:
                             points.append(point)
@@ -257,11 +260,16 @@ class Bridge:
                 break
             cursor = stop
         points.sort(key=lambda p: p[0])
-        if not points:
+        if not points or not any(p[0] <= trade['end'] for p in points):
             raise ValueError('No historical bid/ask ticks available. Replay cannot be reconstructed from this broker.')
         warnings = ['SL/TP lines prefer direct native MT5 position levels, then explicit Python fields, recognized broker trigger comments, or entry-order references. Sources are labeled above. Historical changes cannot be reconstructed, so these are reference lines throughout replay. Floating movement is in price units, not account currency.']
-        if points[0][0] - trade['start'] > 5000 or trade['end'] - points[-1][0] > 5000:
+        position_points = [p for p in points if p[0] <= trade['end']]
+        if points[0][0] - trade['start'] > 5000 or trade['end'] - position_points[-1][0] > 5000:
             warnings.append('Tick coverage does not reach within 5 seconds of entry or exit.')
+        if after_minutes and not any(p[0] > trade['end'] for p in points):
+            warnings.append('No after-exit quotes available in this window; the market may be closed or broker history unavailable.')
+        elif after_minutes and replay_end - points[-1][0] > 60000:
+            warnings.append('After-exit quote coverage ends earlier than requested.')
         gaps = sum(b[0] - a[0] > 60000 for a, b in zip(points, points[1:]))
         if gaps:
             warnings.append(f'{gaps} gaps over 60 seconds; these may include closed market hours or missing ticks.')
@@ -285,7 +293,7 @@ class Bridge:
             warnings.append('Pre-entry candle coverage starts later than requested; market hours or missing history may explain the gap.')
         if automatic and context and len(context)<80:
             warnings.append(f'Loaded {len(context)} completed candles; fewer than the automatic 80-candle target were available.')
-        return dict(trade=trade, points=points, context=context, context_start=context_start,candle_timeframe=candle_timeframe,candle_ms=candle_ms,context_mode='auto' if automatic else 'manual',
+        return dict(trade=trade, points=points, replay_end=max(trade['end'], points[-1][0]), after_minutes=after_minutes, context=context, context_start=context_start,candle_timeframe=candle_timeframe,candle_ms=candle_ms,context_mode='auto' if automatic else 'manual',
             warnings=warnings, source=f'Broker historical ticks + pre-entry {candle_timeframe} candles; coverage not guaranteed')
 
     def connect_native(self, url, key):

@@ -217,7 +217,14 @@ class ReconstructionTests(unittest.TestCase):
                 Tick(time_msc=5000, bid=1.0899, ask=1.09),
                 Tick(time_msc=6000, bid=1.08, ask=1.09)])
         replay = b.replay('77')
-        self.assertEqual(replay['points'], [[1000, 1.1, 1.1001], [5000, 1.0899, 1.09]])
+        self.assertEqual(replay['points'], [[1000, 1.1, 1.1001], [5000, 1.0899, 1.09], [6000, 1.08, 1.09]])
+        self.assertEqual(replay['trade']['end'], 5000)
+        self.assertEqual(replay['replay_end'], 6000)
+        at_exit = b.replay('77', after_minutes=0)
+        self.assertEqual(at_exit['points'], replay['points'][:2])
+        self.assertEqual(at_exit['replay_end'], 5000)
+        with self.assertRaisesRegex(ValueError, 'after-exit'):
+            b.replay('77', after_minutes=999)
         self.assertEqual(replay['trade']['sl'], 1.12)
         self.assertEqual(replay['trade']['tp'], 1.09)
         b.mt.copy_ticks_range = lambda *a: []
