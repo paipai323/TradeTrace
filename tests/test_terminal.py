@@ -65,6 +65,26 @@ class TerminalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'stale'):self.terminal.submit(p)
         self.mt.order_send.assert_not_called()
 
+    def test_position_plan_uses_read_only_account_currency_calculator(self):
+        self.account.trade_mode=2 # Analysis works on live accounts too.
+        self.mt.order_calc_profit.side_effect=[-10,25,3]
+        result=self.terminal.plan(dict(symbol='EURUSD',side='BUY',volume=.01,entry=1.1,stop=1.09,target=1.125))
+        self.assertEqual((result['risk'],result['reward'],result['mark_to_market']),(10,25,3))
+        self.assertEqual(result['currency'],'USD')
+        self.mt.order_calc_profit.assert_any_call(0,'EURUSD',.01,1.1,1.09)
+        self.mt.order_send.assert_not_called();self.mt.order_check.assert_not_called()
+
+    def test_short_plan_direction_and_bad_calculation_fail_cleanly(self):
+        body=dict(symbol='EURUSD',side='SELL',volume=.01,entry=1.1,stop=1.11,target=1.08)
+        self.mt.order_calc_profit.side_effect=[-10,20,-1]
+        self.assertEqual(self.terminal.plan(body)['reward'],20)
+        self.mt.order_calc_profit.assert_any_call(1,'EURUSD',.01,1.1,self.tick.ask)
+        for fields in [dict(stop=1.09),dict(target=1.12),dict(entry=float('nan')),dict(volume=.015)]:
+            with self.subTest(fields=fields),self.assertRaises(ValueError):self.terminal.plan({**body,**fields})
+        self.mt.order_calc_profit.side_effect=[None,20,0]
+        with self.assertRaisesRegex(ValueError,'unavailable'):self.terminal.plan(body)
+        self.mt.order_send.assert_not_called()
+
     def test_symbol_search_includes_symbols_outside_market_watch(self):
         self.mt.symbols_get.return_value=[Row(name='XAUUSD',visible=False),Row(name='EURUSD',visible=True)]
         result=self.terminal.symbols()

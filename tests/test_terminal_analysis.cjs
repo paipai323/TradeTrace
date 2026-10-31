@@ -64,3 +64,13 @@ near(A.timeToCoordinate(hourly,7200,3600,chartCoordinate),120);
 assert.equal(A.timeToCoordinate([],5400,3600,chartCoordinate),null);
 assert.equal(A.timeToCoordinate(hourly,5400,3600,()=>null),null);
 console.log('Fractional timeframe anchor projection checks passed');
+const longPlan={type:'long-position',a:{time:1000,price:100},b:{time:2000,price:125},c:{time:1000,price:90}};
+const shortPlan={type:'short-position',a:{time:1000,price:100},b:{time:2000,price:75},c:{time:1000,price:110}};
+for(const plan of [longPlan,shortPlan]){
+  const m=A.positionMetrics(plan);near(m.risk,10);near(m.reward,25);near(m.ratio,2.5);near(m.riskPercent,10);near(m.rewardPercent,25);
+}
+assert.equal(A.positionMetrics(longPlan).side,'BUY');assert.equal(A.positionMetrics(shortPlan).side,'SELL');
+assert.equal(A.positionMetrics({...longPlan,c:{price:110}}),null);
+assert.equal(A.positionMetrics({...longPlan,a:{price:Infinity}}),null);
+assert.equal(A.positionMetrics({...longPlan,c:{price:100}}),null);
+console.log('Long / short risk-reward checks passed');

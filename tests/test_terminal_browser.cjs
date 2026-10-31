@@ -13,7 +13,7 @@ let browser;
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Test server timeout')),15000);server.stdout.on('data',chunk=>{if(chunk.toString().includes('http://')){clearTimeout(timer);resolve();}});server.on('error',reject);server.stderr.on('data',chunk=>process.stderr.write(chunk));});
   const executablePath=['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find(p=>fs.existsSync(p));
   browser=await playwright.chromium.launch({headless:true,...(executablePath?{executablePath}:{}),args:['--disable-gpu']});
-  const page=await browser.newPage({viewport:{width:1536,height:1100}}),errors=[];let previews=0,submissions=0;
+  const page=await browser.newPage({viewport:{width:1536,height:1100}}),errors=[];let previews=0,submissions=0,planRequests=0,planDelay=0;
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/api/**',async route=>{
     const request=route.request(),endpoint=new URL(request.url()).pathname,body=request.postDataJSON()||{};
@@ -24,6 +24,7 @@ let browser;
     else if(endpoint==='/api/terminal/symbols')value={symbols:['EURUSD','GBPUSD','XAUUSD'],visible:['EURUSD','GBPUSD'],account:'123',server:'Test-Demo',currency:'USD',demo:true};
     else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo:true,positions:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,sl:1.09,tp:1.12,profit:20}]};
     else if(endpoint==='/api/terminal/quotes')value={account:'123',server:'Test-Demo',quotes:Object.fromEntries(body.symbols.map(s=>[s,{bid:1.103,ask:1.1031,time:Date.now()/1000}]))};
+    else if(endpoint==='/api/terminal/plan'){planRequests++;if(planDelay)await new Promise(resolve=>setTimeout(resolve,planDelay));value={account:'123',server:'Test-Demo',currency:'USD',risk:12.5,reward:25,mark_to_market:3,quote_time:Date.now()/1000,note:'Mock gross estimate; no trade placed'};}
     else if(endpoint==='/api/terminal/preview'){previews++;await new Promise(resolve=>setTimeout(resolve,250));value={preview:'test-token',expires_in:60,account:'123',server:'Test-Demo',request:{symbol:body.symbol,volume:Number(body.volume),price:1.1031,sl:0,tp:0}};}
     else if(endpoint==='/api/terminal/submit'){submissions++;value={retcode:10009,comment:'Mocked execution',order:'99',deal:'100',volume:.01,price:1.1031,message:'Test only'};}
     else return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Not available in isolated browser test'})});
@@ -152,6 +153,43 @@ let browser;
   assert.equal(await page.locator('#terminal-rsi').isChecked(),true);assert.equal(await page.locator('#terminal-macd').isChecked(),true);
   storage=await page.evaluate(()=>JSON.parse(localStorage.getItem('tradetrace.terminal.v2')));assert.equal(Object.values(storage.workspaces[JSON.stringify(['Test-Demo','123'])].drawings).flat().length,3);
   assert.deepEqual((await readDrawings())[1],editedTrend,'edited anchors survive reload');
+  // Position drawings are plans, not broker orders.
+  await page.locator('[data-drawing="long-position"]').scrollIntoViewIfNeeded();await page.locator('[data-drawing="long-position"]').click();
+  await page.locator('#terminal-chart').click({position:{x:320,y:180}});
+  await page.locator('#terminal-position-plan').waitFor();
+  assert.equal((await readDrawings()).at(-1).type,'long-position');
+  await page.locator('#terminal-plan-estimate').filter({hasText:'12.50 USD'}).waitFor();
+  const requestsAfterFirstEstimate=planRequests;
+  await page.waitForTimeout(4500);
+  assert.equal(planRequests,requestsAfterFirstEstimate,'unchanged quotes do not recalculate on each polling timestamp');
+  await page.evaluate(()=>{
+    window.estimateTexts=[];
+    window.estimateObserver=new MutationObserver(()=>window.estimateTexts.push(document.getElementById('terminal-plan-estimate').textContent));
+    window.estimateObserver.observe(document.getElementById('terminal-plan-estimate'),{childList:true,subtree:true,characterData:true});
+  });
+  planDelay=900;
+  const planBeforeDrag=(await readDrawings()).at(-1);
+  await page.locator('#terminal-chart').scrollIntoViewIfNeeded();
+  const planChart=await page.locator('#terminal-chart').boundingBox();
+  await page.mouse.move(planChart.x+320,planChart.y+180);await page.mouse.down();await page.mouse.move(planChart.x+320,planChart.y+190,{steps:6});await page.mouse.up();
+  const planAfterDrag=(await readDrawings()).at(-1);
+  assert.ok((await page.locator('#terminal-plan-estimate').textContent()).includes('12.50 USD'),'completed prices remain visible while dragging');
+  assert.notEqual(planAfterDrag.a.price,planBeforeDrag.a.price,'entry handle can be moved');
+  assert.deepEqual(planAfterDrag.b,planBeforeDrag.b,'entry move preserves target');assert.deepEqual(planAfterDrag.c,planBeforeDrag.c,'entry move preserves stop');
+  await page.locator('#terminal-plan-entry').fill('1.103');await page.locator('#terminal-plan-stop').fill('1.102');await page.locator('#terminal-plan-target').fill('1.1055');await page.locator('#terminal-plan-volume').fill('0.02');
+  await page.locator('#terminal-plan-form button[type="submit"]').click();
+  assert.ok((await page.locator('#terminal-plan-metrics').textContent()).includes('1:2.50'));
+  await page.waitForFunction(()=>!document.getElementById('terminal-plan-estimate-state').textContent);
+  const estimateTexts=await page.evaluate(()=>{window.estimateObserver.disconnect();return window.estimateTexts;});
+  assert.ok(estimateTexts.every(value=>value.includes('12.50 USD')&&!value.includes('Calculating')),'refreshes never replace completed values with a loading message');
+  planDelay=0;
+  await page.locator('#terminal-plan-ticket').click();assert.equal(await page.locator('#terminal-side').inputValue(),'BUY');assert.equal(await page.locator('#terminal-sl').inputValue(),'1.10200');assert.equal(await page.locator('#terminal-volume').inputValue(),'0.02');assert.equal(submissions,1,'copying a plan does not submit a trade');
+  await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-long-plan.png')});
+  await page.locator('[data-drawing="short-position"]').scrollIntoViewIfNeeded();await page.locator('[data-drawing="short-position"]').click();await page.locator('#terminal-chart').click({position:{x:520,y:160}});
+  const shortBefore=(await readDrawings()).at(-1);assert.equal(shortBefore.type,'short-position');assert.ok(shortBefore.b.price<shortBefore.a.price&&shortBefore.c.price>shortBefore.a.price);
+  await page.locator('#terminal-plan-ticket').click();assert.equal(await page.locator('#terminal-side').inputValue(),'SELL');assert.equal(submissions,1);
+  await page.locator('#terminal-layout-save').click();await page.reload();await page.locator('#nav-terminal').click();await page.locator('#terminal-chart-title').filter({hasText:'EURUSD'}).waitFor();
+  assert.equal((await readDrawings()).filter(d=>d.type.endsWith('-position')).length,2,'position plans persist across reload');
   await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-desktop.png')});
   await page.setViewportSize({width:600,height:1000});await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-mobile.png')});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+2),false,'no mobile horizontal overflow');

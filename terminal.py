@@ -87,6 +87,33 @@ class Terminal:
                     demo=account.trade_mode == mt.ACCOUNT_TRADE_MODE_DEMO,
                     positions=[{k: str(getattr(p,k)) if k == 'ticket' else getattr(p,k) for k in fields} for p in positions])
 
+    def plan(self, body):
+        """Estimate a hypothetical position; never validates or sends an order."""
+        mt,account=self.connection()
+        symbol,side=str(body.get('symbol','')),body.get('side')
+        info,tick=mt.symbol_info(symbol),mt.symbol_info_tick(symbol)
+        if info is None or tick is None or side not in ('BUY','SELL'):
+            raise ValueError('Select a valid broker symbol and side.')
+        volume,entry,stop,target=[float(body.get(k) or 0) for k in ('volume','entry','stop','target')]
+        if not all(math.isfinite(v) and v>0 for v in (volume,entry,stop,target)):
+            raise ValueError('Enter positive finite prices and lot volume.')
+        direction=1 if side=='BUY' else -1
+        if direction*(entry-stop)<=0 or direction*(target-entry)<=0:
+            raise ValueError('Stop and target must be on opposite sides of entry.')
+        if not info.volume_min<=volume<=info.volume_max or abs(volume/info.volume_step-round(volume/info.volume_step))>1e-7:
+            raise ValueError(f'Choose {info.volume_min}–{info.volume_max} lots in steps of {info.volume_step}.')
+        action=mt.ORDER_TYPE_BUY if side=='BUY' else mt.ORDER_TYPE_SELL
+        risk=mt.order_calc_profit(action,symbol,volume,entry,stop)
+        reward=mt.order_calc_profit(action,symbol,volume,entry,target)
+        quote=tick.bid if side=='BUY' else tick.ask
+        mark=mt.order_calc_profit(action,symbol,volume,entry,quote) if math.isfinite(quote) and quote>0 else None
+        if risk is None or reward is None or not math.isfinite(risk) or not math.isfinite(reward):
+            raise ValueError('Broker profit calculation unavailable for this plan.')
+        self.bridge.check()
+        return dict(account=str(account.login),server=account.server,currency=account.currency,risk=abs(risk),reward=reward,
+                    mark_to_market=mark if mark is not None and math.isfinite(mark) else None,quote_time=tick.time,
+                    note='Hypothetical gross estimate; excludes commission, swap and slippage. This is not an open position.')
+
     def request(self, body):
         mt, account = self.connection(trading=True)
         symbol, side = str(body.get('symbol', '')), body.get('side')

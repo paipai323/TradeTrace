@@ -19,7 +19,7 @@ class TerminalApiTests(unittest.TestCase):
     def test_terminal_routes_require_authentication_and_dispatch_explicitly(self):
         terminal=Mock()
         with patch.object(server,'terminal',terminal):
-            for route in ('symbols','quotes','market','preview','submit'):
+            for route in ('symbols','quotes','market','plan','preview','submit'):
                 getattr(terminal,route).return_value={'route':route}
                 self.assertEqual(self.post('/api/terminal/'+route,{'symbol':'EURUSD'}),(200,{'route':route}))
                 self.assertEqual(self.post('/api/terminal/'+route,{},token='wrong')[0],403)

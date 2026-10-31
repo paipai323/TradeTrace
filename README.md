@@ -13,7 +13,7 @@ saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
 
-## Market workspace (v1.9.0)
+## Market workspace (v1.10.0)
 
 Open **Terminal → Connect & load markets**. This connects to your running MT5
 terminal and loads symbols in one step; the native MCP history API key is not
@@ -65,6 +65,24 @@ restricted to demo accounts on the backend.
   anchors. Older per-interval drawings are merged automatically on connection;
   identical copies are deduplicated. Chart zoom and visible ranges remain separate
   for each interval.
+- **Long / Short position** tools place a hypothetical trade plan at a clicked
+  entry, with an initial 2:1 price risk/reward ratio and 25-bar display width.
+  Green shows the target region and red the stop region. Select a plan to see
+  entry, stop and target axis labels, price distances, percentages, lot volume and
+  the live risk/reward ratio. Drag the entry, target or stop handles to adjust
+  levels; the right entry handle adjusts width; dragging the body moves the whole
+  plan. Levels remain valid for the chosen side and prices snap to the broker tick.
+  The selected-plan form supports precise entry/SL/TP and lot-volume edits.
+- Monetary plan estimates use MT5's read-only `order_calc_profit` in account
+  currency and are available for analysis on both demo and live accounts. They are
+  hypothetical gross loss at stop, profit at target and mark-to-market at the last
+  bid (long) or ask (short), excluding commissions, swap and slippage. Stale quotes
+  are identified. A plan is not an open position and its estimates are not recorded
+  P&L. Without broker calculation data, price distances and risk/reward still work.
+- **Copy SL/TP to order ticket** copies the selected plan's side, levels and lots
+  without submitting an order. The ticket is a market order at the current broker
+  price, not an order at the drawn entry; its existing demo-only review and
+  confirmation remain required. Plans save and remain shared across timeframes.
 - Settings, watchlists, visible time ranges, drawings and alerts autosave to
   browser local storage. **Save layout / Restore layout** keeps an explicit
   symbol, interval, style and indicator preset. These settings are specific to the

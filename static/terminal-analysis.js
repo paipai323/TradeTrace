@@ -87,6 +87,13 @@
     }
     return result;
   }
-  const api={values,sma,ema,rsi,bollinger,macd,points,logicalToTime,timeToLogical,timeToCoordinate,hitDrawing,shareDrawingTimeframes};
+  function positionMetrics(item){
+    if(!['long-position','short-position'].includes(item?.type)||!item.a||!item.b||!item.c)return null;
+    const direction=item.type==='long-position'?1:-1,entry=item.a.price,target=item.b.price,stop=item.c.price;
+    const reward=(target-entry)*direction,risk=(entry-stop)*direction;
+    if(![entry,target,stop,risk,reward].every(Number.isFinite)||Math.min(entry,target,stop,risk,reward)<=0)return null;
+    return {side:direction===1?'BUY':'SELL',entry,target,stop,risk,reward,ratio:reward/risk,riskPercent:risk/entry*100,rewardPercent:reward/entry*100};
+  }
+  const api={values,sma,ema,rsi,bollinger,macd,points,logicalToTime,timeToLogical,timeToCoordinate,hitDrawing,shareDrawingTimeframes,positionMetrics};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.TerminalAnalysis=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
