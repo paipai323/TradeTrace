@@ -10,15 +10,17 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 from core import Bridge, running_terminals
+from terminal import Terminal
 
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
+terminal = Terminal(bridge)
 token = secrets.token_urlsafe(32)
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['terminal.py', 'static/terminal.js', 'static/terminal.css', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -53,6 +55,8 @@ class Handler(BaseHTTPRequestHandler):
         routes['/connection.js'] = ('connection.js', 'text/javascript')
         routes['/journal.js'] = ('journal.js', 'text/javascript')
         routes['/journal.css'] = ('journal.css', 'text/css')
+        routes['/terminal.js'] = ('terminal.js', 'text/javascript')
+        routes['/terminal.css'] = ('terminal.css', 'text/css')
         route = routes.get(urlparse(self.path).path)
         if not route:
             return self.send({'error': 'Not found'}, 404)
@@ -74,7 +78,15 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length < limit:
                 raise ValueError('Invalid request length')
             body = json.loads(self.rfile.read(length))
-            if self.path == '/api/journal/overview':
+            if self.path == '/api/terminal/symbols':
+                result = terminal.symbols()
+            elif self.path == '/api/terminal/market':
+                result = terminal.market(body)
+            elif self.path == '/api/terminal/preview':
+                result = terminal.preview(body)
+            elif self.path == '/api/terminal/submit':
+                result = terminal.submit(body)
+            elif self.path == '/api/journal/overview':
                 result = bridge.journal.overview(body.get('account') or bridge.journal_account)
             elif self.path == '/api/journal/entry':
                 result = bridge.journal.entry(body['account'], str(body['position']))

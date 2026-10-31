@@ -89,13 +89,14 @@ function showJournalView(view){
   }
   snapshotReplay();
   journalView=view;
-  $('journal-pane').hidden=view==='replay';$('replay-pane').hidden=view!=='replay';$('calendar-panel').hidden=view!=='calendar';
-  for(const name of ['journal','calendar','replay'])$('nav-'+name).classList.toggle('selected',name===view);
+  $('terminal-pane').hidden=view!=='terminal';
+  $('journal-pane').hidden=view==='replay'||view==='terminal';$('replay-pane').hidden=view!=='replay';$('calendar-panel').hidden=view!=='calendar';
+  for(const name of ['journal','calendar','replay','terminal'])$('nav-'+name).classList.toggle('selected',name===view);
   placeReplay();
   if(view!=='replay'&&$('journal-inline-replay').hidden)pause();
   renderJournal();updateReplayActions();
 }
-for(const view of ['journal','calendar','replay'])$('nav-'+view).onclick=()=>showJournalView(view);
+for(const view of ['journal','calendar','replay','terminal'])$('nav-'+view).onclick=()=>showJournalView(view);
 function updateReplayActions(){
   placeReplay();
   $('journal-replay').disabled=!journalPosition||busy;
