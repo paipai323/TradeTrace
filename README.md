@@ -1,6 +1,17 @@
-# MT5 Trading Journal
+# TradeTrace
 
 A private, read-only local Windows app to replay closed MT5 trades, with outcomes, net P&L, recorded exit reasons, SL/TP and pre-entry candles.
+
+The application lives at the repository root. Run `Install.cmd` once, then
+`Start.cmd`. Python modules sit beside the launcher, browser assets are in
+`static/`, and automated checks are in `tests/`. Local journal data and the
+encrypted API key stay in `.local/`, which is excluded from Git.
+
+If upgrading from the earlier `outputs/mt5-replay` layout, stop the old server
+first, move its `.local` folder to the repository root to keep your journal and
+saved key, and run `Install.cmd` to create the environment at the new location.
+Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
+pinned shortcut.
 
 ## Trading journal (v1.3.0)
 
