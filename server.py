@@ -16,11 +16,11 @@ ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 terminal = Terminal(bridge)
 token = secrets.token_urlsafe(32)
-VERSION = '1.7.0'
+VERSION = '1.8.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['terminal.py', 'static/terminal.js', 'static/terminal.css', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -57,10 +57,15 @@ class Handler(BaseHTTPRequestHandler):
         routes['/journal.css'] = ('journal.css', 'text/css')
         routes['/terminal.js'] = ('terminal.js', 'text/javascript')
         routes['/terminal.css'] = ('terminal.css', 'text/css')
+        routes['/terminal-analysis.js'] = ('terminal-analysis.js', 'text/javascript')
+        routes['/vendor/lightweight-charts-5.0.9.js'] = ('vendor/lightweight-charts-5.0.9.js', 'text/javascript')
         route = routes.get(urlparse(self.path).path)
         if not route:
             return self.send({'error': 'Not found'}, 404)
-        raw = (ROOT / route[0]).read_text(encoding='utf-8').replace('__TOKEN__', token).replace('__VERSION__', VERSION).replace('__BUILD__', BUILD).encode()
+        source = (ROOT / route[0]).read_text(encoding='utf-8')
+        if route[0] == 'index.html':
+            source = source.replace('__TERMINAL__', (ROOT / 'terminal.html').read_text(encoding='utf-8-sig'))
+        raw = source.replace('__TOKEN__', token).replace('__VERSION__', VERSION).replace('__BUILD__', BUILD).encode()
         self.send_response(200)
         self.send_header('Content-Type', route[1] + '; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
@@ -80,6 +85,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if self.path == '/api/terminal/symbols':
                 result = terminal.symbols()
+            elif self.path == '/api/terminal/quotes':
+                result = terminal.quotes(body)
             elif self.path == '/api/terminal/market':
                 result = terminal.market(body)
             elif self.path == '/api/terminal/preview':

@@ -1,6 +1,6 @@
 # TradeTrace
 
-A private, read-only local Windows app to replay closed MT5 trades, with outcomes, net P&L, recorded exit reasons, SL/TP and pre-entry candles.
+A private local-browser Windows workspace for MT5 market analysis, demo market orders, and a trading journal with historical trade replay.
 
 The application lives at the repository root. Run `Install.cmd` once, then
 `Start.cmd`. Python modules sit beside the launcher, browser assets are in
@@ -12,6 +12,83 @@ first, move its `.local` folder to the repository root to keep your journal and
 saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
+
+## Market workspace (v1.8.0)
+
+Open **Terminal → Connect & load markets**. This connects to your running MT5
+terminal and loads symbols in one step; the native MCP history API key is not
+needed for charting. An existing connected session loads automatically when the
+Terminal tab opens. Live accounts support market analysis; execution remains
+restricted to demo accounts on the backend.
+
+- Locally bundled TradingView Lightweight Charts 5.0.9 provides candles/line view,
+  crosshair OHLC, pan/zoom, price scaling, **Fit** history and **Latest** controls.
+  M1, M5, M15, M30, H1, H4 and D1 use up to 1,000 available broker candles.
+- **Indicators** offers SMA 20, EMA 50, Bollinger Bands (20, two population standard
+  deviations), Wilder RSI 14, MACD (12/26 EMA, nine-period EMA signal) and broker
+  tick volume. RSI, MACD and tick volume have resizable panes. Tick volume is a
+  quote activity measure, not exchange traded volume. Current candles and their
+  indicators can change until the candle closes. Chart times are UTC.
+- Search the broker's complete symbol list and add up to 20 symbols to the
+  watchlist. Viewing an additional symbol can add it to MT5 Market Watch so quotes
+  are available. The default watchlist starts with visible symbols.
+- Choose **Level**, **Trend**, **Zone** or **Fib**, then click one or two chart
+  anchors. Escape cancels a pending drawing; Undo removes the last drawing; Clear
+  removes drawings for the current symbol/interval. Anchors can be placed between
+  candles, before loaded history, or in empty space beyond the latest candle.
+  Empty timeline space projects the selected candle interval; it does not invent
+  market candles or predict session openings. Drag the price axis to expose higher
+  or lower prices, including while a drawing tool is selected. Completed drawings
+  use timestamps and price anchors. In Cursor mode, click a drawing to select it;
+  highlighted handles identify its anchors. Read its exact price levels on the right price axis and beneath the chart.
+  Selected prices update as you drag; Fibonacci shows each retracement level.
+  Crosshair hover/click shows enabled indicator values beneath the chart title,
+  with RSI and MACD retaining their own units. Drag the body to move the drawing or
+  drag an anchor handle to resize it. Click empty chart space or press Escape to
+  deselect. The drawing-toolbar Delete button or the Delete/Backspace key removes
+  only the selected drawing; typing in form fields does not delete drawings.
+  Changes save immediately after dragging. Drawings are separate for each account/server,
+  symbol and interval.
+- Settings, watchlists, visible time ranges, drawings and alerts autosave to
+  browser local storage. **Save layout / Restore layout** keeps an explicit
+  symbol, interval, style and indicator preset. These settings are specific to the
+  browser profile and local server origin (including port); they are not included
+  in SQLite journal backups and may be cleared by browser storage cleanup.
+- Local bid-price alerts trigger once at/above or at/below their level using fresh
+  broker quotes. Up to 20 alerts are supported, including symbols other than the
+  current chart. Triggered alerts are highlighted in the alert list. Polling runs
+  approximately every two seconds only while the Terminal tab and browser page
+  are visible and connected. There are no OS notifications or background alerts;
+  a level crossed and reversed while the app is inactive may be missed.
+- The order ticket supports market buys/sells with optional SL/TP. **Review demo
+  order** checks account permissions, quote freshness, lot step, price tick size,
+  stop distance and broker order validation. **Confirm & send** uses a single-use,
+  60-second preview; inputs changed during review invalidate confirmation. Quotes
+  and broker checks are refreshed before submission. Unknown outcomes are never
+  retried automatically. Final execution must be checked in MT5.
+- Open positions and their entry/SL/TP references appear on the chart. **Open
+  journal** filters your journal to the current symbol. **Sync closed trades to
+  journal** uses the history From/To dates in Trade replay; existing review and
+  attachment behavior is preserved.
+
+This version does not implement Pine Script, community indicators, multiple chart
+windows, pending orders, closing/modifying positions, or draggable trading levels.
+Manage those trading operations in MT5. No real trades are placed by the tests.
+See `THIRD_PARTY_NOTICES.md` for the chart library's separate Apache 2.0 license.
+
+Verification:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+node tests/test_terminal_analysis.cjs
+node tests/test_replay_candles.cjs
+```
+
+`node tests/test_terminal_browser.cjs` additionally requires Playwright on Node's
+module path and Microsoft Edge (or an installed Playwright Chromium). It launches
+an isolated headless browser with every broker endpoint intercepted, verifies
+chart tools/persistence/preview behavior and responsive layout, and saves QA
+screenshots under ignored `work/`. It does not use your normal browser profile.
 
 ## Trading journal (v1.3.0)
 

@@ -13,7 +13,7 @@ class Terminal:
         self.bridge.check()
         mt = self.bridge.mt
         account, terminal = mt.account_info(), mt.terminal_info()
-        if terminal is None or not terminal.connected:
+        if account is None or terminal is None or not terminal.connected:
             raise ValueError('MT5 is disconnected.')
         if trading:
             if account.trade_mode != mt.ACCOUNT_TRADE_MODE_DEMO:
@@ -27,8 +27,26 @@ class Terminal:
         rows = mt.symbols_get()
         if rows is None:
             raise ValueError('Cannot load broker symbols.')
-        return dict(symbols=[s.name for s in rows if s.visible], account=str(account.login), server=account.server,
+        return dict(symbols=sorted(s.name for s in rows), visible=[s.name for s in rows if s.visible], account=str(account.login), server=account.server,
                     currency=account.currency, demo=account.trade_mode == mt.ACCOUNT_TRADE_MODE_DEMO)
+
+    def quotes(self, body):
+        mt, account = self.connection()
+        symbols = body.get('symbols', [])
+        if not isinstance(symbols, list) or len(symbols) > 40 or not all(isinstance(s, str) and 0 < len(s) <= 128 for s in symbols):
+            raise ValueError('Choose up to 40 broker symbols.')
+        quotes = {}
+        for symbol in dict.fromkeys(symbols):
+            info = mt.symbol_info(symbol)
+            if info is None:
+                continue
+            if not info.visible and not mt.symbol_select(symbol, True):
+                continue
+            tick = mt.symbol_info_tick(symbol)
+            if tick is not None and 0 < tick.bid <= tick.ask and math.isfinite(tick.bid) and math.isfinite(tick.ask):
+                quotes[symbol] = dict(bid=tick.bid, ask=tick.ask, time=tick.time)
+        self.bridge.check()
+        return dict(quotes=quotes, account=str(account.login), server=account.server)
 
     def market(self, body):
         mt, account = self.connection()
@@ -39,14 +57,16 @@ class Terminal:
         info = mt.symbol_info(symbol)
         if info is None or not mt.symbol_select(symbol, True):
             raise ValueError('Select an available broker symbol.')
-        rates = mt.copy_rates_from_pos(symbol, getattr(mt, 'TIMEFRAME_' + timeframe), 0, 500)
+        rates = mt.copy_rates_from_pos(symbol, getattr(mt, 'TIMEFRAME_' + timeframe), 0, 1000)
         tick = mt.symbol_info_tick(symbol)
         positions = mt.positions_get()
         if rates is None or tick is None or positions is None:
             raise ValueError('Market data or positions unavailable. Check MT5 connection.')
+        self.bridge.check()
         fields = ('ticket', 'symbol', 'type', 'volume', 'price_open', 'price_current', 'sl', 'tp', 'profit')
-        return dict(bars=[[int(r['time'])*1000, float(r['open']), float(r['high']), float(r['low']), float(r['close'])] for r in rates],
+        return dict(bars=[[int(r['time'])*1000, float(r['open']), float(r['high']), float(r['low']), float(r['close']), int(r['tick_volume'])] for r in rates],
                     bid=tick.bid, ask=tick.ask, quote_time=tick.time, digits=info.digits,
+                    tick_size=info.trade_tick_size,
                     volume_min=info.volume_min, volume_max=info.volume_max, volume_step=info.volume_step,
                     balance=account.balance, equity=account.equity, margin_free=account.margin_free,
                     currency=account.currency, account=str(account.login), server=account.server,
