@@ -198,6 +198,8 @@ let browser;
   await page.locator('summary').filter({hasText:'Indicators'}).click();
   await page.locator('#terminal-clear').scrollIntoViewIfNeeded();
   const toolBounds=await page.locator('.terminal-drawing-tools').boundingBox(),clearBounds=await page.locator('#terminal-clear').boundingBox(),footerBounds=await page.locator('.terminal-chart-footer').boundingBox();
+  const graphBounds=await page.locator('#terminal-chart').boundingBox();
+  assert.ok(toolBounds.y+toolBounds.height<=graphBounds.y+1,'horizontal drawing toolbar stays above the graph');
   assert.ok(toolBounds.y+toolBounds.height<=footerBounds.y+1,'toolbar stays above the chart footer');
   assert.ok(clearBounds.y+clearBounds.height<=toolBounds.y+toolBounds.height+1,'last drawing tool is reachable inside the scroll area');
   await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-short-chart.png')});
