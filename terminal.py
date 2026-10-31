@@ -2,6 +2,8 @@
 import math
 import secrets
 import time
+from datetime import datetime, timezone, timedelta
+from timeframes import NATIVE, interval, aggregate
 
 
 class Terminal:
@@ -52,19 +54,31 @@ class Terminal:
         mt, account = self.connection()
         symbol = str(body.get('symbol', ''))
         timeframe = body.get('timeframe', 'M5')
-        if timeframe not in ('M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'):
-            raise ValueError('Unsupported timeframe.')
+        unit,count = interval(timeframe)
         info = mt.symbol_info(symbol)
         if info is None or not mt.symbol_select(symbol, True):
             raise ValueError('Select an available broker symbol.')
-        rates = mt.copy_rates_from_pos(symbol, getattr(mt, 'TIMEFRAME_' + timeframe), 0, 1000)
+        note = ''
+        if unit == 'S':
+            end=datetime.now(timezone.utc)
+            rates=mt.copy_ticks_range(symbol,end-timedelta(minutes=20),end,mt.COPY_TICKS_INFO)
+            bars=aggregate(rates,timeframe,ticks=True) if rates is not None else None
+            note='Second candles use broker bid ticks from the last 20 minutes; intervals without ticks are omitted.'
+        elif timeframe in NATIVE:
+            rates=mt.copy_rates_from_pos(symbol,getattr(mt,'TIMEFRAME_'+timeframe),0,1000)
+            bars=[[int(r['time'])*1000,float(r['open']),float(r['high']),float(r['low']),float(r['close']),int(r['tick_volume'])] for r in rates] if rates is not None else None
+        else:
+            source={'M':'M1','H':'H1','D':'D1','W':'W1','MN':'MN1'}[unit]
+            rates=mt.copy_rates_from_pos(symbol,getattr(mt,'TIMEFRAME_'+source),0,min(60000,count*1001+count))
+            bars=aggregate(rates,timeframe) if rates is not None else None
+            note='Custom interval aggregated from broker '+source+' candles, aligned in UTC; history depends on MT5 coverage.'
         tick = mt.symbol_info_tick(symbol)
         positions = mt.positions_get()
         if rates is None or tick is None or positions is None:
             raise ValueError('Market data or positions unavailable. Check MT5 connection.')
         self.bridge.check()
         fields = ('ticket', 'symbol', 'type', 'volume', 'price_open', 'price_current', 'sl', 'tp', 'profit')
-        return dict(bars=[[int(r['time'])*1000, float(r['open']), float(r['high']), float(r['low']), float(r['close']), int(r['tick_volume'])] for r in rates],
+        return dict(bars=bars, interval_note=note,
                     bid=tick.bid, ask=tick.ask, quote_time=tick.time, digits=info.digits,
                     tick_size=info.trade_tick_size,
                     volume_min=info.volume_min, volume_max=info.volume_max, volume_step=info.volume_step,

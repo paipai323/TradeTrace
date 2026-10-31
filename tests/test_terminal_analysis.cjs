@@ -37,3 +37,30 @@ assert.equal(A.hitDrawing('rectangle',{x:100,y:100},{x:0,y:0},{x:150,y:50}),fals
 assert.equal(A.hitDrawing('fib',{x:0,y:0},{x:100,y:100},{x:50,y:61.8}),true);
 assert.equal(A.hitDrawing('fib',{x:0,y:0},{x:100,y:100},{x:150,y:61.8}),false);
 console.log('Drawing selection geometry checks passed');
+const scope='account-A',level={type:'level',a:{time:1000,price:1.1}},drawingTrend={type:'drawingTrend',a:{time:1000,price:1},b:{time:1200,price:2}};
+const legacy={
+  [JSON.stringify([scope,'EURUSD','M5'])]:[level],
+  [JSON.stringify([scope,'EURUSD','H1'])]:[level,drawingTrend],
+  [JSON.stringify([scope,'XAUUSD','M5'])]:[drawingTrend],
+  [JSON.stringify(['account-B','EURUSD','M5'])]:[level]
+};
+const merged=A.shareDrawingTimeframes(legacy,scope);
+assert.deepEqual(merged[JSON.stringify([scope,'EURUSD'])],[level,drawingTrend]);
+assert.deepEqual(merged[JSON.stringify([scope,'XAUUSD'])],[drawingTrend]);
+assert.deepEqual(merged[JSON.stringify(['account-B','EURUSD','M5'])],[level]);
+assert.equal(Object.hasOwn(merged,JSON.stringify([scope,'EURUSD','M5'])),false);
+assert.deepEqual(A.shareDrawingTimeframes(merged,scope),merged,'migration is idempotent');
+merged[JSON.stringify([scope,'EURUSD'])]=[];
+assert.deepEqual(A.shareDrawingTimeframes(merged,scope)[JSON.stringify([scope,'EURUSD'])],[],'deleted drawings do not return');
+assert.equal(legacy[JSON.stringify([scope,'EURUSD','M5'])].length,1,'migration preserves original input');
+console.log('Shared drawing migration checks passed');
+// LWC 5.0.9 rejects fractional indexes by returning zero: never pass one through.
+const hourly=[{time:3600},{time:7200},{time:10800}];
+const chartCoordinate=index=>Number.isInteger(index)?100+20*index:0;
+near(A.timeToCoordinate(hourly,5400,3600,chartCoordinate),110);
+near(A.timeToCoordinate(hourly,12600,3600,chartCoordinate),150);
+near(A.timeToCoordinate(hourly,1800,3600,chartCoordinate),90);
+near(A.timeToCoordinate(hourly,7200,3600,chartCoordinate),120);
+assert.equal(A.timeToCoordinate([],5400,3600,chartCoordinate),null);
+assert.equal(A.timeToCoordinate(hourly,5400,3600,()=>null),null);
+console.log('Fractional timeframe anchor projection checks passed');

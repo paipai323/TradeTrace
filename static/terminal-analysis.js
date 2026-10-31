@@ -51,6 +51,16 @@
     while(hi-lo>1){const mid=(lo+hi)>>1;if(bars[mid].time<=time)lo=mid;else hi=mid;}
     return lo+(time-bars[lo].time)/(bars[hi].time-bars[lo].time);
   }
+  function timeToCoordinate(bars,time,interval,coordinateForIndex){
+    const logical=timeToLogical(bars,time,interval);
+    if(logical===null)return null;
+    // LWC 5.0.9 silently returns zero for non-integer logical coordinates.
+    const left=Math.floor(logical),right=Math.ceil(logical),x1=coordinateForIndex(left);
+    if(!Number.isFinite(x1))return null;
+    if(left===right)return x1;
+    const x2=coordinateForIndex(right);
+    return Number.isFinite(x2)?x1+(x2-x1)*(logical-left):null;
+  }
   function segmentDistance(p,a,b){
     const dx=b.x-a.x,dy=b.y-a.y,length=dx*dx+dy*dy;
     const t=length?Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/length)):0;
@@ -66,6 +76,17 @@
     if(type==='fib')return insideX&&[0,.236,.382,.5,.618,.786,1].some(r=>Math.abs(p.y-(a.y+(b.y-a.y)*r))<=tolerance);
     return false;
   }
-  const api={values,sma,ema,rsi,bollinger,macd,points,logicalToTime,timeToLogical,hitDrawing};
+  function shareDrawingTimeframes(drawings,scope){
+    const result={},seen=new Map();
+    for(const [key,items] of Object.entries(drawings||{})){
+      let parts;try{parts=JSON.parse(key);}catch(_){result[key]=items;continue;}
+      if(!Array.isArray(parts)||![2,3].includes(parts.length)||parts[0]!==scope||!Array.isArray(items)){result[key]=items;continue;}
+      const shared=JSON.stringify(parts.slice(0,2));
+      if(!Array.isArray(result[shared])){result[shared]=[];seen.set(shared,new Set());}
+      for(const item of items){const fingerprint=JSON.stringify(item);if(!seen.get(shared).has(fingerprint)){seen.get(shared).add(fingerprint);result[shared].push(item);}}
+    }
+    return result;
+  }
+  const api={values,sma,ema,rsi,bollinger,macd,points,logicalToTime,timeToLogical,timeToCoordinate,hitDrawing,shareDrawingTimeframes};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.TerminalAnalysis=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

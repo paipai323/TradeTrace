@@ -11,6 +11,7 @@
   let state={watch:[],drawings:{},alerts:[],views:{}};
   let selectedDrawing=-1,drawingDrag=null,selectedPriceLines=[];
   const workspaceKey=()=>JSON.stringify([scope,el('symbol').value,el('timeframe').value]);
+  const drawingKey=()=>JSON.stringify([scope,el('symbol').value]);
   const status=message=>{el('status').textContent=message;};
   const text=(tag,value,className)=>{const node=document.createElement(tag);node.textContent=value;if(className)node.className=className;return node;};
   const safeList=value=>Array.isArray(value)?value:[];
@@ -23,10 +24,41 @@
   function applyLayout(value){
     if(!value||typeof value!=='object')return;
     if(symbols.includes(value.symbol))el('symbol').value=value.symbol;
-    if(['M1','M5','M15','M30','H1','H4','D1'].includes(value.timeframe))el('timeframe').value=value.timeframe;
+    if(validInterval(value.timeframe)){if(![...el('timeframe').options].some(o=>o.value===value.timeframe))el('timeframe').append(new Option(intervalName(value.timeframe),value.timeframe));el('timeframe').value=value.timeframe;}
+    renderIntervals();
     if(['candles','line'].includes(value.style))el('style').value=value.style;
     for(const name of indicators)if(typeof value.indicators?.[name]==='boolean')el(name).checked=value.indicators[name];
   }
+  const intervalLimits={S:60,M:1440,H:168,D:365,W:52,MN:12};
+  const intervalUnits={S:['Seconds','second','s',1],M:['Minutes','minute','m',60],H:['Hours','hour','h',3600],D:['Days','day','D',86400],W:['Weeks','week','W',604800],MN:['Months','month','M',2629800]};
+  const validInterval=code=>{const match=/^(MN|S|M|H|D|W)([1-9][0-9]{0,3})$/.exec(code||'');return match&&Number(match[2])<=intervalLimits[match[1]];};
+  const intervalParts=code=>/^(MN|S|M|H|D|W)([1-9][0-9]*)$/.exec(code);
+  const intervalLabel=code=>{const [,unit,n]=intervalParts(code);return n==='1'&&['D','W','MN'].includes(unit)?intervalUnits[unit][2]:n+intervalUnits[unit][2];};
+  const intervalName=code=>{const [,unit,n]=intervalParts(code);return `${n} ${intervalUnits[unit][1]}${n==='1'?'':'s'}`;};
+  const intervalDefaults={S:[1,5,10,15,30,45],M:[1,2,3,4,5,6,10,12,15,20,30,45],H:[1,2,3,4,6,8,12],D:[1],W:[1],MN:[1,3,6,12]};
+  let customIntervals=safeList(saved.customIntervals).filter(validInterval),favoriteIntervals=safeList(saved.favoriteIntervals||['M1','M5','M15','M30','H1','H4','D1','W1']).filter(validInterval);
+  function renderIntervals(){
+    const current=el('timeframe').value||'M5';
+    const codes=[...new Set([...Object.entries(intervalDefaults).flatMap(([unit,counts])=>counts.map(n=>unit+n)),...customIntervals,...(validInterval(current)?[current]:[])])];
+    el('timeframe').replaceChildren(...codes.map(code=>new Option(intervalName(code),code)));el('timeframe').value=current;
+    const buttonFor=code=>{const button=text('button',intervalLabel(code));button.type='button';button.dataset.interval=code;button.title=intervalName(code);button.classList.toggle('selected',current===code);button.setAttribute('aria-pressed',String(current===code));button.onclick=()=>chooseInterval(code);return button;};
+    el('interval-favorites').replaceChildren(...[...new Set([...favoriteIntervals,...(!favoriteIntervals.includes(current)?[current]:[])])].map(buttonFor));
+    el('interval-groups').replaceChildren(...Object.entries(intervalUnits).map(([unit,info])=>{
+      const group=document.createElement('details');group.open=true;const title=text('summary',info[0].toUpperCase());group.append(title);
+      const selectedCodes=codes.filter(code=>intervalParts(code)[1]===unit).sort((a,b)=>Number(intervalParts(a)[2])-Number(intervalParts(b)[2]));
+      for(const code of selectedCodes){const row=text('div','','terminal-interval-row'),button=buttonFor(code);button.textContent=intervalName(code);const star=text('button',favoriteIntervals.includes(code)?'★':'☆','terminal-interval-star');star.type='button';star.title=(favoriteIntervals.includes(code)?'Unpin ':'Pin ')+intervalName(code);star.setAttribute('aria-label',star.title);star.setAttribute('aria-pressed',String(favoriteIntervals.includes(code)));star.onclick=()=>{if(favoriteIntervals.includes(code))favoriteIntervals=favoriteIntervals.filter(v=>v!==code);else if(favoriteIntervals.length<16)favoriteIntervals.push(code);else{el('custom-error').textContent='You can pin up to 16 favorite intervals.';return;}saved.favoriteIntervals=favoriteIntervals;persist();renderIntervals();};row.append(button,star);group.append(row);}return group;
+    }));
+  }
+  function chooseInterval(code){
+    if(!validInterval(code))return;if(![...el('timeframe').options].some(o=>o.value===code))el('timeframe').append(new Option(intervalName(code),code));
+    el('timeframe').value=code;el('interval-menu').open=false;renderIntervals();selectionChanged();chart?.applyOptions({timeScale:{secondsVisible:code.startsWith('S'),timeVisible:!code.startsWith('MN')&&!code.startsWith('W')&&!code.startsWith('D')}});
+  }
+  el('custom-toggle').onclick=()=>{el('custom-interval').hidden=!el('custom-interval').hidden;};
+  el('custom-unit').onchange=()=>{el('custom-count').max=intervalLimits[el('custom-unit').value];};
+  el('custom-interval').onsubmit=event=>{event.preventDefault();const code=el('custom-unit').value+el('custom-count').value;if(!validInterval(code)){el('custom-error').textContent='Enter a whole interval within the selected unit’s limit.';return;}if(customIntervals.length>=30&&!customIntervals.includes(code)){el('custom-error').textContent='Maximum 30 custom intervals.';return;}if(!customIntervals.includes(code))customIntervals.push(code);saved.customIntervals=customIntervals;el('custom-error').textContent='';chooseInterval(code);};
+  document.addEventListener('pointerdown',event=>{if(!event.target.closest('.terminal-interval-picker'))el('interval-menu').open=false;});
+  el('interval-menu').addEventListener('keydown',event=>{if(event.key==='Escape'){el('interval-menu').open=false;event.stopPropagation();}});
+  renderIntervals();
   applyLayout(saved.settings);
   function invalidate(clear=true){ticketRevision++;preview=null;clearTimeout(expiryTimer);el('submit').hidden=true;if(clear)el('order-summary').replaceChildren();updateTicket();}
   function updateTicket(){
@@ -40,8 +72,8 @@
       const value=await response.json();if(!response.ok)throw Error(value.error||'Request failed');return value;
     }catch(error){if(error.name==='AbortError')throw Error('Request timed out. For order submission, check MT5 positions/history before retrying.');throw error;}finally{clearTimeout(timeout);}
   }
-  function currentDrawings(){return safeList(state.drawings[workspaceKey()]);}
-  const drawingPoint=p=>({x:chart.timeScale().logicalToCoordinate(drawingLogical(p.time)),y:main.priceToCoordinate(p.price)});
+  function currentDrawings(){return safeList(state.drawings[drawingKey()]);}
+  const drawingPoint=p=>({x:A.timeToCoordinate(bars,p.time,intervalSeconds(),index=>chart.timeScale().logicalToCoordinate(index)),y:main.priceToCoordinate(p.price)});
   function updateSelectionPrices(){
     const item=currentDrawings()[selectedDrawing];
     const levels=!item?[]:item.type==='fib'?[0,.236,.382,.5,.618,.786,1].map(r=>({title:`Fib ${r}`,price:item.a.price+(item.b.price-item.a.price)*r})):item.type==='level'?[{title:'Level',price:item.a.price}]:[{title:item.type==='rectangle'?'Corner A':'Anchor A',price:item.a.price},{title:item.type==='rectangle'?'Corner B':'Anchor B',price:item.b.price}];
@@ -50,7 +82,7 @@
     el('selection-values').replaceChildren(...levels.map(level=>{const label=text('span',`${level.title}: ${Number(level.price).toFixed(market?.digits??5)}`);label.dataset.price=level.price;return label;}));
   }
   function selectDrawing(index){selectedDrawing=index;el('delete-drawing').disabled=index<0;updateSelectionPrices();primitive?.update();el('tool-hint').textContent=index>=0?'Drawing selected · drag to move · drag handles to resize · Delete removes · Escape deselects':'Click a drawing to select · drag empty space to pan';}
-  function removeSelectedDrawing(){if(selectedDrawing<0)return;state.drawings[workspaceKey()]=currentDrawings().filter((_,i)=>i!==selectedDrawing);selectDrawing(-1);persist();}
+  function removeSelectedDrawing(){if(selectedDrawing<0)return;state.drawings[drawingKey()]=currentDrawings().filter((_,i)=>i!==selectedDrawing);selectDrawing(-1);persist();}
   function drawingHit(p){
     const list=currentDrawings(),selected=list[selectedDrawing];
     if(selected)for(const anchor of ['a','b']){if(!selected[anchor])continue;const point=drawingPoint(selected[anchor]);if(point.x!==null&&point.y!==null&&Math.hypot(p.x-point.x,p.y-point.y)<=9)return {index:selectedDrawing,anchor};}
@@ -64,7 +96,7 @@
     if(el('chart').hasPointerCapture(drag.pointerId))el('chart').releasePointerCapture(drag.pointerId);
     updateSelectionPrices();primitive?.update();
   }
-  const intervalSeconds=()=>({M1:60,M5:300,M15:900,M30:1800,H1:3600,H4:14400,D1:86400}[el('timeframe').value]);
+  const intervalSeconds=()=>{const [,unit,n]=intervalParts(el('timeframe').value);return intervalUnits[unit][3]*Number(n);};
   const drawingTime=logical=>A.logicalToTime(bars,logical,intervalSeconds());
   const drawingLogical=time=>A.timeToLogical(bars,time,intervalSeconds());
   function visibleDrawingRange(){const range=chart?.timeScale().getVisibleLogicalRange();return range&&bars.length?{from:drawingTime(range.from),to:drawingTime(range.to)}:null;}
@@ -98,7 +130,7 @@
   }
   function buildChart(){
     const range=visibleDrawingRange();chart?.remove();priceLines=[];selectedPriceLines=[];overlays={};
-    chart=L.createChart(el('chart'),{autoSize:true,layout:{background:{type:L.ColorType.Solid,color:'#0d1420'},textColor:'#8e9eb4',fontFamily:'Segoe UI, Arial',fontSize:11,attributionLogo:true,panes:{separatorColor:'#263143',separatorHoverColor:'#415671',enableResize:true}},grid:{vertLines:{color:'#192335'},horzLines:{color:'#192335'}},rightPriceScale:{borderColor:'#29364b',minimumWidth:74},timeScale:{borderColor:'#29364b',timeVisible:true,secondsVisible:false,rightOffset:24,barSpacing:7},crosshair:{mode:L.CrosshairMode.Normal},localization:{locale:'en-US'}});
+    chart=L.createChart(el('chart'),{autoSize:true,layout:{background:{type:L.ColorType.Solid,color:'#0d1420'},textColor:'#8e9eb4',fontFamily:'Segoe UI, Arial',fontSize:11,attributionLogo:true,panes:{separatorColor:'#263143',separatorHoverColor:'#415671',enableResize:true}},grid:{vertLines:{color:'#192335'},horzLines:{color:'#192335'}},rightPriceScale:{borderColor:'#29364b',minimumWidth:74},timeScale:{borderColor:'#29364b',timeVisible:true,secondsVisible:el('timeframe').value.startsWith('S'),rightOffset:24,barSpacing:7},crosshair:{mode:L.CrosshairMode.Normal},localization:{locale:'en-US'}});
     const priceFormat={type:'price',precision:market?.digits??5,minMove:market?.tick_size||10**-(market?.digits??5)};
     main=chart.addSeries(el('style').value==='line'?L.LineSeries:L.CandlestickSeries,el('style').value==='line'?{color:'#78a7ff',lineWidth:2,priceFormat}:{upColor:'#43c9a0',downColor:'#ef7385',wickUpColor:'#43c9a0',wickDownColor:'#ef7385',borderVisible:false,priceFormat});
     const line=(name,color,pane=0,title=name)=>{overlays[name]=chart.addSeries(L.LineSeries,{color,lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false,title,priceFormat:pane===0?priceFormat:{type:'price',precision:name==='rsi'?2:6,minMove:name==='rsi'?.01:.000001}},pane);};
@@ -120,7 +152,7 @@
       const price=main.coordinateToPrice(y);if(typeof time!=='number'||price===null)return;
       const p={time,price},list=currentDrawings();
       if(tool==='level')list.push({type:tool,a:p});else if(!pending){pending=p;primitive.update();el('tool-hint').textContent='Choose the second anchor · Escape cancels';return;}else{list.push({type:tool,a:pending,b:p});pending=null;}
-      state.drawings[workspaceKey()]=list;persist();setTool('cursor');selectDrawing(list.length-1);primitive.update();
+      state.drawings[drawingKey()]=list;persist();setTool('cursor');selectDrawing(list.length-1);primitive.update();
     };
     const showIndicatorValues=event=>{
       const values=Object.entries(overlays).flatMap(([name,series])=>{const point=event.seriesData.get(series);if(!Number.isFinite(point?.value))return [];const precision=name==='volume'?0:name==='rsi'?2:['macd','signal','histogram'].includes(name)?6:market?.digits??5;return [`${series.options().title||name}: ${point.value.toFixed(precision)}`];});
@@ -174,7 +206,7 @@
     try{
       if(!auto){status('Connecting to your running MT5 terminal…');const session=await call('session');if(!session.connected){const account=await call('connect',{path:document.getElementById('path').value||document.getElementById('terminals').value});if(typeof showAccount==='function')showAccount(account);}}
       const data=await call('terminal/symbols');const nextScope=JSON.stringify([data.server,data.account]);
-      if(scope!==nextScope){invalidate();scope=nextScope;const source=saved.workspaces?.[scope]||{};state={watch:safeList(source.watch).filter(s=>typeof s==='string').slice(0,20),drawings:source.drawings&&typeof source.drawings==='object'?source.drawings:{},alerts:safeList(source.alerts).filter(a=>a&&typeof a.symbol==='string'&&Number.isFinite(a.price)).slice(0,20),views:source.views&&typeof source.views==='object'?source.views:{}};quotes={};}
+      if(scope!==nextScope){invalidate();scope=nextScope;const source=saved.workspaces?.[scope]||{};state={watch:safeList(source.watch).filter(s=>typeof s==='string').slice(0,20),drawings:source.drawings&&typeof source.drawings==='object'?source.drawings:{},alerts:safeList(source.alerts).filter(a=>a&&typeof a.symbol==='string'&&Number.isFinite(a.price)).slice(0,20),views:source.views&&typeof source.views==='object'?source.views:{}};state.drawings=A.shareDrawingTimeframes(state.drawings,scope);quotes={};}
       symbols=data.symbols;el('symbol').replaceChildren(...symbols.map(name=>new Option(name,name)));el('symbol').disabled=!symbols.length;
       if(!symbols.length)throw Error('Your broker returned no symbols. Check MT5 connection.');
       if(!state.watch.length)state.watch=(data.visible?.length?data.visible:symbols).slice(0,6);state.watch=state.watch.filter(s=>symbols.includes(s));
@@ -192,25 +224,25 @@
       market=next;bars=next.bars.map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4],volume:b[5]||0}));
       const stale=Date.now()/1000-next.quote_time>30;
       el('feed').textContent=stale?'Last available quotes':next.demo?'Demo · connected':'Live · analysis';el('feed').classList.toggle('online',!stale);
-      el('chart-title').textContent=`${symbol} · ${timeframe}`;el('ticket-symbol').textContent=symbol;
+      el('chart-title').textContent=`${symbol} · ${intervalLabel(timeframe)}`;el('ticket-symbol').textContent=symbol;
       el('bid').textContent='BID '+format(next.bid);el('ask').textContent='ASK '+format(next.ask);el('quote-time').textContent=(stale?'STALE · ':'')+new Date(next.quote_time*1000).toISOString().replace('T',' ').slice(0,19)+' UTC';
       el('account').replaceChildren(text('strong',`${next.demo?'DEMO':'LIVE · analysis only'} · ${next.account}`),text('small',next.server),...['balance','equity','margin_free'].map(name=>text('div',`${name==='margin_free'?'Free margin':name[0].toUpperCase()+name.slice(1)}  ${Number(next[name]).toFixed(2)} ${next.currency}`)));
       el('volume').min=next.volume_min;el('volume').max=next.volume_max;el('volume').step=next.volume_step;el('volume-info').textContent=`${next.volume_min}–${next.volume_max} lots · step ${next.volume_step} · spread ${format(next.ask-next.bid)}`;
       el('position-count').textContent=next.positions.length;
       const rows=next.positions.map(p=>{const row=document.createElement('tr');for(const value of [p.ticket,p.symbol,p.type===0?'BUY':'SELL',p.volume,p.price_open,p.price_current,p.sl||'—',p.tp||'—',p.profit])row.append(text('td',value));row.lastChild.className=p.profit>=0?'gain':'loss';return row;});
       el('positions').replaceChildren(...(rows.length?rows:[(()=>{const row=document.createElement('tr'),cell=text('td','No open positions.');cell.colSpan=9;row.append(cell);return row;})()]));
-      updateTicket();renderMarket();status(stale?'Market is quiet or closed. Showing the latest available broker candles.':`${symbol} · ${bars.length} broker candles · Drawings and layouts save locally`);
+      updateTicket();renderMarket();status(stale?'Market is quiet or closed. Showing the latest available broker candles.':`${symbol} · ${bars.length} broker candles · ${next.interval_note||'Drawings and layouts save locally'}`);
       const quoteSymbols=[...new Set([...state.watch,...state.alerts.filter(a=>!a.fired).map(a=>a.symbol)])];
       if(quoteSymbols.length){try{const result=await call('terminal/quotes',{symbols:quoteSymbols});if(version===revision){if(JSON.stringify([result.server,result.account])!==scope)throw Error('Account changed. Reconnect MT5.');quotes=result.quotes;renderWatchlist();checkAlerts();}}catch(error){if(version===revision)status('Chart loaded; watchlist quotes unavailable: '+error.message);}}
     }catch(error){if(version===revision){el('feed').textContent='Disconnected';el('feed').classList.remove('online');status(error.message);market=null;invalidate();}}
     finally{loading=false;if(version!==revision)refresh();}
   }
   el('start').onclick=()=>connectWorkspace();
-  el('symbol').onchange=selectionChanged;el('timeframe').onchange=selectionChanged;
+  el('symbol').onchange=selectionChanged;el('timeframe').onchange=()=>chooseInterval(el('timeframe').value);
   for(const name of [...indicators,'style'])el(name).onchange=()=>{buildChart();setTool(tool);persist();};
   document.querySelectorAll('[data-drawing]').forEach(button=>button.onclick=()=>setTool(button.dataset.drawing));
   el('delete-drawing').onclick=removeSelectedDrawing;
-  el('undo').onclick=()=>{selectDrawing(-1);state.drawings[workspaceKey()]=currentDrawings().slice(0,-1);pending=null;persist();primitive?.update();};el('clear').onclick=()=>{selectDrawing(-1);state.drawings[workspaceKey()]=[];pending=null;persist();primitive?.update();};
+  el('undo').onclick=()=>{selectDrawing(-1);state.drawings[drawingKey()]=currentDrawings().slice(0,-1);pending=null;persist();primitive?.update();};el('clear').onclick=()=>{selectDrawing(-1);state.drawings[drawingKey()]=[];pending=null;persist();primitive?.update();};
   el('fit').onclick=()=>chart.timeScale().fitContent();el('latest').onclick=()=>chart.timeScale().scrollToRealTime();
   el('layout-save').onclick=()=>{saved.namedLayout=layout();persist();status('Layout saved. Use Restore layout to return to these settings.');};
   el('layout-restore').onclick=()=>{if(!saved.namedLayout){status('Save a layout first.');return;}applyLayout(saved.namedLayout);selectionChanged();buildChart();status('Saved layout restored.');};

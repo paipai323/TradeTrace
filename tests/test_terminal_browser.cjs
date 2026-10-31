@@ -7,6 +7,7 @@ const playwright=require('playwright');
 const root=path.resolve(__dirname,'..'),port=18876,url=`http://127.0.0.1:${port}`;
 const server=spawn(path.join(root,'.venv/Scripts/python.exe'),['server.py','--port',String(port),'--no-browser'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});
 const candles=Array.from({length:300},(_,i)=>[Date.UTC(2026,9,20)/1+300000*i,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100+i]);
+const hourlyCandles=candles.map((bar,i)=>[Math.floor(candles.at(-1)[0]/3600000)*3600000-(299-i)*3600000,...bar.slice(1)]);
 let browser;
 (async()=>{
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Test server timeout')),15000);server.stdout.on('data',chunk=>{if(chunk.toString().includes('http://')){clearTimeout(timer);resolve();}});server.on('error',reject);server.stderr.on('data',chunk=>process.stderr.write(chunk));});
@@ -21,16 +22,44 @@ let browser;
     else if(endpoint==='/api/journal/overview')value={accounts:[],account:null,trades:[]};
     else if(endpoint==='/api/connect')value={account:'123',server:'Test-Demo',currency:'USD'};
     else if(endpoint==='/api/terminal/symbols')value={symbols:['EURUSD','GBPUSD','XAUUSD'],visible:['EURUSD','GBPUSD'],account:'123',server:'Test-Demo',currency:'USD',demo:true};
-    else if(endpoint==='/api/terminal/market')value={bars:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo:true,positions:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,sl:1.09,tp:1.12,profit:20}]};
+    else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo:true,positions:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,sl:1.09,tp:1.12,profit:20}]};
     else if(endpoint==='/api/terminal/quotes')value={account:'123',server:'Test-Demo',quotes:Object.fromEntries(body.symbols.map(s=>[s,{bid:1.103,ask:1.1031,time:Date.now()/1000}]))};
     else if(endpoint==='/api/terminal/preview'){previews++;await new Promise(resolve=>setTimeout(resolve,250));value={preview:'test-token',expires_in:60,account:'123',server:'Test-Demo',request:{symbol:body.symbol,volume:Number(body.volume),price:1.1031,sl:0,tp:0}};}
     else if(endpoint==='/api/terminal/submit'){submissions++;value={retcode:10009,comment:'Mocked execution',order:'99',deal:'100',volume:.01,price:1.1031,message:'Test only'};}
     else return route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:'Not available in isolated browser test'})});
     await route.fulfill({contentType:'application/json',body:JSON.stringify(value)});
   });
-  await page.goto(url);await page.locator('#nav-terminal').click();await page.locator('#terminal-start').click();
+  await page.goto(url);
+  const projection=await page.evaluate(()=>{
+    const host=document.createElement('div');host.style.position='absolute';host.style.top='0';document.body.append(host);
+    const chart=LightweightCharts.createChart(host,{width:600,height:300}),series=chart.addSeries(LightweightCharts.CandlestickSeries);
+    const origin=Date.UTC(2026,9,31)/1000;
+    const check=seconds=>{
+      const bars=Array.from({length:12},(_,i)=>({time:origin+i*seconds,open:1,high:2,low:.5,close:1.5}));series.setData(bars);chart.timeScale().setVisibleLogicalRange({from:0,to:14});
+      const x0=chart.timeScale().logicalToCoordinate(0),x1=chart.timeScale().logicalToCoordinate(1);
+      const times=[origin+1800,origin+3*3600+1800,origin+12*seconds+seconds/2];
+      return times.map(time=>({actual:TerminalAnalysis.timeToCoordinate(bars,time,seconds,i=>chart.timeScale().logicalToCoordinate(i)),expected:x0+(time-origin)/seconds*(x1-x0)}));
+    };
+    const result={m30:check(1800),h1:check(3600)};chart.remove();host.remove();return result;
+  });
+  for(const result of [...projection.m30,...projection.h1])assert.ok(Math.abs(result.actual-result.expected)<.01,'fractional anchors stay at their timestamp on real LWC time scales');
+  await page.locator('#nav-terminal').click();await page.locator('#terminal-start').click();
   await page.locator('#terminal-chart-title').filter({hasText:'EURUSD'}).waitFor();
   await page.waitForFunction(()=>document.querySelector('#terminal-chart-empty').hidden);
+  await page.locator('#terminal-interval-menu>summary').click();
+  await page.locator('.terminal-interval-popover').screenshot({path:path.join(root,'work/terminal-interval-menu.png')});
+  await page.locator('#terminal-interval-groups [data-interval="M2"]').click();
+  assert.equal(await page.locator('#terminal-timeframe').inputValue(),'M2');
+  await page.locator('#terminal-interval-menu>summary').click();
+  await page.getByRole('button',{name:'Pin 2 minutes',exact:true}).click();
+  await page.locator('#terminal-interval-menu>summary').click();
+  assert.equal(await page.locator('#terminal-interval-favorites [data-interval="M2"]').count(),1);
+  await page.locator('#terminal-interval-menu>summary').click();
+  await page.locator('#terminal-custom-toggle').click();
+  await page.locator('#terminal-custom-count').fill('7');
+  await page.locator('#terminal-custom-interval button[type="submit"]').click();
+  assert.equal(await page.locator('#terminal-timeframe').inputValue(),'M7');
+  await page.locator('#terminal-interval-favorites [data-interval="M5"]').click();
   await page.locator('summary').filter({hasText:'Indicators'}).click();
   for(const name of ['ema','bb','rsi','macd','volume-indicator'])await page.locator('#terminal-'+name).check();
   await page.locator('summary').filter({hasText:'Indicators'}).click();
@@ -78,12 +107,38 @@ let browser;
   assert.equal(futureDrawing.type,'rectangle');
   assert.ok(futureDrawing.a.time>candles.at(-1)[0]/1000&&futureDrawing.b.time>candles.at(-1)[0]/1000,'anchors beyond last candle');
   assert.ok(futureDrawing.a.price>Math.max(...candles.map(b=>b[2])),'anchor above historical price range');
+  const sharedBeforeSwitch=await readDrawings();
+  await page.locator('#terminal-interval-favorites [data-interval="H1"]').click();
+  await page.locator('#terminal-chart-title').filter({hasText:'1h'}).waitFor();
+  assert.deepEqual(await readDrawings(),sharedBeforeSwitch,'same symbol collection on H1');
+  const levelPosition=await page.waitForFunction(()=>{
+    const host=document.getElementById('terminal-chart'),rect=host.getBoundingClientRect();
+    for(const canvas of host.querySelectorAll('canvas')){
+      const box=canvas.getBoundingClientRect();if(box.width<300||box.height<200)continue;
+      const ctx=canvas.getContext('2d'),pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+      for(let y=0;y<canvas.height;y++){
+        let gold=0;for(let x=10;x<canvas.width-10;x++){const i=(y*canvas.width+x)*4;if(Math.abs(pixels[i]-228)<15&&Math.abs(pixels[i+1]-189)<15&&Math.abs(pixels[i+2]-112)<15)gold++;}
+        if(gold>canvas.width*.3)return {x:Math.min(400,box.width*.5)+box.left-rect.left,y:y*box.height/canvas.height+box.top-rect.top};
+      }
+    }
+    return false;
+  });
+  await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/shared-timeframe.png')});
+  await page.locator('#terminal-chart').click({position:await levelPosition.jsonValue()});
+  assert.equal(await page.locator('#terminal-selection-values').isVisible(),true,'M5 drawing selectable on H1');
+  assert.ok((await page.locator('#terminal-selection-values').textContent()).includes(sharedBeforeSwitch[0].a.price.toFixed(5)));
+  await page.locator('[data-drawing="level"]').click();await page.locator('#terminal-chart').click({position:{x:200,y:210}});
+  assert.equal((await readDrawings()).length,4,'new H1 drawing shares the symbol collection');
+  await page.locator('#terminal-delete-drawing').click();
+  await page.locator('#terminal-interval-favorites [data-interval="M5"]').click();
+  await page.locator('#terminal-chart-title').filter({hasText:'5m'}).waitFor();
+  assert.deepEqual(await readDrawings(),sharedBeforeSwitch,'drawings and anchors preserved across timeframe switches');
   await page.locator('#terminal-search').fill('XAU');await page.locator('#terminal-search-results button').click();
   await page.locator('#terminal-chart-title').filter({hasText:'XAUUSD'}).waitFor();
   await page.locator('#terminal-alert-price').fill('1');await page.locator('#terminal-alert-add').click();
   await page.locator('#terminal-alert-list .fired').waitFor({timeout:10000});
   await page.locator('#terminal-layout-save').click();
-  await page.locator('#terminal-timeframe').selectOption('H1');await page.locator('#terminal-layout-restore').click();assert.equal(await page.locator('#terminal-timeframe').inputValue(),'M5');
+  await page.locator('#terminal-interval-favorites [data-interval="H1"]').click();await page.locator('#terminal-layout-restore').click();assert.equal(await page.locator('#terminal-timeframe').inputValue(),'M5');
   await page.locator('#terminal-style').selectOption('line');await page.locator('#terminal-style').selectOption('candles');
   // A field edit during a slow preview must never display a confirmation for old input.
   await page.locator('#terminal-preview').click();await page.locator('#terminal-volume').fill('0.02');await page.waitForTimeout(400);assert.equal(await page.locator('#terminal-submit').isVisible(),false);
@@ -92,12 +147,22 @@ let browser;
   await page.locator('#terminal-symbol').selectOption('EURUSD');await page.locator('#terminal-chart-title').filter({hasText:'EURUSD'}).waitFor();
   await page.locator('#terminal-layout-save').click();
   await page.reload();await page.locator('#nav-terminal').click();await page.locator('#terminal-chart-title').filter({hasText:'EURUSD'}).waitFor();
+  assert.equal(await page.locator('#terminal-interval-favorites [data-interval="M2"]').count(),1,'favorite interval restored');
+  assert.equal(await page.locator('#terminal-timeframe option[value="M7"]').count(),1,'custom interval restored');
   assert.equal(await page.locator('#terminal-rsi').isChecked(),true);assert.equal(await page.locator('#terminal-macd').isChecked(),true);
   storage=await page.evaluate(()=>JSON.parse(localStorage.getItem('tradetrace.terminal.v2')));assert.equal(Object.values(storage.workspaces[JSON.stringify(['Test-Demo','123'])].drawings).flat().length,3);
   assert.deepEqual((await readDrawings())[1],editedTrend,'edited anchors survive reload');
   await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-desktop.png')});
   await page.setViewportSize({width:600,height:1000});await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-mobile.png')});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+2),false,'no mobile horizontal overflow');
+  await page.locator('summary').filter({hasText:'Indicators'}).click();
+  for(const name of ['sma','ema','bb','rsi','macd','volume-indicator'])await page.locator('#terminal-'+name).uncheck();
+  await page.locator('summary').filter({hasText:'Indicators'}).click();
+  await page.locator('#terminal-clear').scrollIntoViewIfNeeded();
+  const toolBounds=await page.locator('.terminal-drawing-tools').boundingBox(),clearBounds=await page.locator('#terminal-clear').boundingBox(),footerBounds=await page.locator('.terminal-chart-footer').boundingBox();
+  assert.ok(toolBounds.y+toolBounds.height<=footerBounds.y+1,'toolbar stays above the chart footer');
+  assert.ok(clearBounds.y+clearBounds.height<=toolBounds.y+toolBounds.height+1,'last drawing tool is reachable inside the scroll area');
+  await page.locator('#terminal-pane').screenshot({path:path.join(root,'work/terminal-short-chart.png')});
   await page.locator('#terminal-journal').click();assert.equal(await page.locator('#journal-pane').isVisible(),true);
   assert.deepEqual(errors,[]);console.log('Terminal browser tests passed (mock broker; no real trades)');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{await browser?.close();server.kill();});

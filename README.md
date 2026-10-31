@@ -13,7 +13,7 @@ saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
 
-## Market workspace (v1.8.0)
+## Market workspace (v1.9.0)
 
 Open **Terminal → Connect & load markets**. This connects to your running MT5
 terminal and loads symbols in one step; the native MCP history API key is not
@@ -23,7 +23,20 @@ restricted to demo accounts on the backend.
 
 - Locally bundled TradingView Lightweight Charts 5.0.9 provides candles/line view,
   crosshair OHLC, pan/zoom, price scaling, **Fit** history and **Latest** controls.
-  M1, M5, M15, M30, H1, H4 and D1 use up to 1,000 available broker candles.
+  The interval bar shows starred favorites; the arrow opens grouped Seconds,
+  Minutes, Hours, Days, Weeks and Months menus. Star/unstar intervals to customize
+  the bar (up to 16 favorites). The selected interval remains visible even when
+  unstarred. Favorites and up to 30 custom intervals save in this browser.
+- Native MT5 intervals from M1 through MN1 use up to 1,000 broker candles,
+  including M2/M3/M4/M6/M10/M12/M20 and H2/H3/H6/H8/H12. Custom intervals support
+  1–60 seconds, 1–1,440 minutes, 1–168 hours, 1–365 days, 1–52 weeks and 1–12
+  months. Second candles aggregate broker bid ticks from the last 20 minutes;
+  intervals with no ticks are omitted and no ticks are synthesized. Other custom
+  intervals aggregate smaller native candles (up to 60,000 source candles), using
+  UTC boundaries, Monday-based weeks and calendar months. The first incomplete
+  source interval is discarded. History and second candles depend on broker
+  coverage; closed markets may have no recent second candles. Projected drawing
+  anchors beyond loaded monthly history use an approximate month duration.
 - **Indicators** offers SMA 20, EMA 50, Bollinger Bands (20, two population standard
   deviations), Wilder RSI 14, MACD (12/26 EMA, nine-period EMA signal) and broker
   tick volume. RSI, MACD and tick volume have resizable panes. Tick volume is a
@@ -34,7 +47,7 @@ restricted to demo accounts on the backend.
   are available. The default watchlist starts with visible symbols.
 - Choose **Level**, **Trend**, **Zone** or **Fib**, then click one or two chart
   anchors. Escape cancels a pending drawing; Undo removes the last drawing; Clear
-  removes drawings for the current symbol/interval. Anchors can be placed between
+  removes drawings for the current symbol across all intervals. Anchors can be placed between
   candles, before loaded history, or in empty space beyond the latest candle.
   Empty timeline space projects the selected candle interval; it does not invent
   market candles or predict session openings. Drag the price axis to expose higher
@@ -47,8 +60,11 @@ restricted to demo accounts on the backend.
   drag an anchor handle to resize it. Click empty chart space or press Escape to
   deselect. The drawing-toolbar Delete button or the Delete/Backspace key removes
   only the selected drawing; typing in form fields does not delete drawings.
-  Changes save immediately after dragging. Drawings are separate for each account/server,
-  symbol and interval.
+  Changes save immediately after dragging. Drawings are shared across intervals for
+  the same account/server and symbol, using their original timestamp and price
+  anchors. Older per-interval drawings are merged automatically on connection;
+  identical copies are deduplicated. Chart zoom and visible ranges remain separate
+  for each interval.
 - Settings, watchlists, visible time ranges, drawings and alerts autosave to
   browser local storage. **Save layout / Restore layout** keeps an explicit
   symbol, interval, style and indicator preset. These settings are specific to the
