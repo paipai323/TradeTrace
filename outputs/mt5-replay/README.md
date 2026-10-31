@@ -52,6 +52,15 @@ V1 supports one entry plus one full exit, positions lasting up to 7 days and 500
 
 The server listens on 127.0.0.1 only and uses a per-process request token. No external chart services are used. Selecting a symbol can add it to Market Watch. Start.cmd reuses an existing server only when app, version/build and workspace match. Close the old console if a stale version occupies the port; another process is never terminated. Live setup must run outside the coding assistant sandbox. Use a single browser session; reconnect after switching accounts. Stop the console with Ctrl+C.
 
+## License
+
+This project uses the custom **Trading Journal Source Available License 1.0**;
+see [LICENSE](LICENSE). Personal and internal business use, including professional
+trading, is permitted. Free sharing and modification are permitted with the
+license and notices preserved. Selling the app, bundling it into a paid product,
+or charging for hosted access requires separate written permission. Third-party
+dependencies retain their own licenses. This project is source available.
+
 ## Development
 
 Python standard-library backend; vanilla JavaScript/canvas frontend. Live connection needs the official MetaTrader5 package. The direct native client uses only Python standard-library HTTP/JSON.
