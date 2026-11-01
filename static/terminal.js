@@ -9,7 +9,8 @@
   let chart, main, overlays={}, primitive, priceLines=[], market=null, bars=[], symbols=[], quotes={}, scope='offline';
   let loading=false, connecting=false, running=false, revision=0, ticketRevision=0, preview=null, submitting=false, reviewing=false, tool='cursor', pending=null, lastChartKey='', expiryTimer;
   let state={watch:[],drawings:{},alerts:[],views:{}};
-  let orderDrag=null,ticketPick=null,editingOrder=null,draftPriceLines=[],draftSymbol='';
+  let orderDrag=null,editingOrder=null,draftPriceLines=[],draftSymbol='';
+  const ticketHandleNodes=new Map();
   let closeToken=null,closePosition=null,cancelOrder=null,closeOperation='close',closeRevision=0,closeLoading=false,closing=false,closeExpiryTimer;
   let selectedDrawing=-1,drawingDrag=null,selectedPriceLines=[];
   let planEstimate=null,planEstimateKey='',planEstimateContext='',planEstimateRevision=0,planEstimateTimer,planEstimatePending=false,planEstimateAt=0;
@@ -121,17 +122,58 @@
     if(!Number.isFinite(price)||price<=0||!Number.isFinite(quote)||price===quote)return null;
     return side==='BUY'?(price<quote?'LIMIT':'STOP'):(price>quote?'LIMIT':'STOP');
   }
+  const entryReference=()=>el('order-kind').value==='MARKET'?(el('side').value==='BUY'?market?.ask:market?.bid):Number(el('order-price').value);
+  function seedPendingEntry(){
+    if(!market||el('order-kind').value==='MARKET'||Number(el('order-price').value)>0)return;
+    const side=el('side').value,quote=side==='BUY'?market.ask:market.bid,gap=Math.max(market.stops_distance||0,(market.tick_size||10**-market.digits)*2);
+    el('order-price').value=planPrice(quote+(side==='BUY'?1:-1)*gap).toFixed(market.digits);
+  }
   function draftLevels(){
-    if(!market||!el('show-ticket').checked)return [];
-    return [{field:'order-price',title:'Draft entry',color:'#e4bd70'}, {field:'sl',title:'Draft SL',color:'#ef7385'},{field:'tp',title:'Draft TP',color:'#43c9a0'}].flatMap(level=>{
-      if(level.field==='order-price'&&el('order-kind').value==='MARKET')return [];
-      const price=Number(el(level.field).value);return Number.isFinite(price)&&price>0?[{...level,price,y:main.priceToCoordinate(price)}]:[];
+    if(!market||!main||!el('show-ticket').checked)return [];
+    return [{field:'order-price',title:el('order-kind').value==='MARKET'?'Market entry':'Draft entry',color:'#e4bd70'}, {field:'sl',title:'Stop loss',color:'#ef7385'},{field:'tp',title:'Take profit',color:'#43c9a0'}].flatMap(level=>{
+      const price=level.field==='order-price'?entryReference():Number(el(level.field).value);
+      return Number.isFinite(price)&&price>0?[{...level,price,y:main.priceToCoordinate(price)}]:[];
     });
+  }
+  function dragProtectionPrice(field,price){
+    if(field==='order-price')return planPrice(price);
+    const reference=el('order-kind').value==='MARKET'?(el('side').value==='BUY'?market.bid:market.ask):entryReference();
+    const tick=market.tick_size||10**-market.digits,gap=Math.max(market.stops_distance||0,tick)+tick;
+    const below=el('side').value==='BUY'?field==='sl':field==='tp';
+    return planPrice(Math.max(tick,below?Math.min(price,reference-gap):Math.max(price,reference+gap)));
+  }
+  function startTicketDrag(event,field,addY=null){
+    if(!market||submitting||closing||event.button!==0)return;
+    const original=el(field).value,originalMode=el('order-kind').value;
+    if(field==='order-price'&&originalMode==='MARKET'){el('order-kind').value='PENDING';el('order-price').value='';seedPendingEntry();}
+    if(addY!==null){const price=main.coordinateToPrice(addY);if(price>0)el(field).value=dragProtectionPrice(field,price).toFixed(market.digits);}
+    selectDrawing(-1);invalidate();orderDrag={field,original,originalMode,pointerId:event.pointerId};el('chart').focus({preventScroll:true});el('chart').setPointerCapture(event.pointerId);event.preventDefault();event.stopImmediatePropagation();updateOrderHint();syncDraftLines();
+  }
+  function renderTicketHandles(size){
+    const levels=draftLevels(),entry=levels.find(level=>level.field==='order-price'),items=[];
+    if(entry&&Number.isFinite(entry.y)){
+      const left=Math.max(44,Math.min(size.width-174,size.width*.65)),clampY=y=>Math.max(0,Math.min(size.height-26,y-12));
+      for(const level of levels)if(Number.isFinite(level.y)&&level.y>=0&&level.y<=size.height)items.push({...level,left,top:clampY(level.y),add:false});
+      if(entry.y>=0&&entry.y<=size.height)for(const [field,label,color] of [['sl','SL','#ef7385'],['tp','TP','#43c9a0']])if(!Number(el(field).value)){
+        const below=el('side').value==='BUY'?field==='sl':field==='tp',y=Math.max(15,Math.min(size.height-15,entry.y+(below?34:-34)));
+        items.push({field,title:label,color,left:left-38,top:clampY(y),add:true,addY:y});
+      }
+    }
+    const labels=items.filter(item=>!item.add).sort((a,b)=>a.top-b.top);for(let i=1;i<labels.length;i++)labels[i].top=Math.max(labels[i].top,labels[i-1].top+28);for(let i=labels.length-1;i>=0;i--)labels[i].top=Math.min(labels[i].top,size.height-26-(labels.length-1-i)*28);
+    const keys=new Set(items.map(item=>item.field));for(const [key,node] of ticketHandleNodes)if(!keys.has(key)){node.remove();ticketHandleNodes.delete(key);}
+    for(const item of items){
+      let node=ticketHandleNodes.get(item.field);
+      if(!node){node=document.createElement('div');const grip=text('button','');grip.type='button';grip.dataset.ticketGrip=item.field;grip.onpointerdown=event=>startTicketDrag(event,item.field,node._addY);node.append(grip);const remove=text('button','×');remove.type='button';remove.dataset.ticketRemove=item.field;remove.onclick=()=>{if(item.field==='order-price')return;el(item.field).value='';updateOrderKind();};node.append(remove);el('ticket-handles').append(node);ticketHandleNodes.set(item.field,node);}
+      node._addY=item.add?item.addY:null;node.className='terminal-ticket-handle'+(item.add?' is-adder':'');node.style.setProperty('--level-color',item.color);node.style.left=item.left+'px';node.style.top=item.top+'px';
+      const grip=node.firstChild;grip.textContent=item.add?item.title:item.field==='order-price'?`${el('volume').value||'0'} · ${el('side').value} ${el('order-kind').value==='MARKET'?'Market':inferredKind()||'Pending'}`:`${item.title} · ${item.price.toFixed(market.digits)}`;
+      grip.title=item.add?'Drag to add '+(item.field==='sl'?'stop loss':'take profit'):'Drag to change '+item.title.toLowerCase();grip.dataset.ticketAdd=item.add?item.field:'';
+      node.lastChild.hidden=item.add||item.field==='order-price';node.lastChild.setAttribute('aria-label','Remove '+(item.field==='sl'?'stop loss':'take profit'));
+    }
   }
   function syncDraftLines(){
     if(!main)return;
     const levels=draftLevels();while(draftPriceLines.length>levels.length)main.removePriceLine(draftPriceLines.pop());
-    levels.forEach((level,i)=>{const options={price:level.price,color:level.color,title:level.title,axisLabelVisible:true,lineVisible:true,lineWidth:2,lineStyle:L.LineStyle.Dashed};if(draftPriceLines[i])draftPriceLines[i].applyOptions(options);else draftPriceLines.push(main.createPriceLine(options));});primitive?.update();
+    levels.forEach((level,i)=>{const options={price:level.price,color:level.color,title:level.title,axisLabelVisible:true,lineVisible:true,lineWidth:2,lineStyle:L.LineStyle.Dashed};if(draftPriceLines[i])draftPriceLines[i].applyOptions(options);else draftPriceLines.push(main.createPriceLine(options));});renderTicketHandles(chart.paneSize(0));primitive?.update();
   }
   function draftLevelHit(p){const levels=draftLevels();return levels.filter(level=>Number.isFinite(level.y)&&Math.abs(level.y-p.y)<=7).sort((a,b)=>Math.abs(a.y-p.y)-Math.abs(b.y-p.y))[0]||null;}
   function pendingLevelHit(p){
@@ -154,7 +196,7 @@
   }
   el('ticket-edit-cancel').onclick=()=>{endOrderEdit();el('order-price').value='';el('sl').value='';el('tp').value='';updateOrderKind();};
   function finishOrderDrag(cancel=false){
-    if(!orderDrag)return;const drag=orderDrag;orderDrag=null;if(cancel)el(drag.field).value=drag.original;
+    if(!orderDrag)return;const drag=orderDrag;orderDrag=null;if(cancel){el(drag.field).value=drag.original;el('order-kind').value=drag.originalMode||el('order-kind').value;}
     if(el('chart').hasPointerCapture(drag.pointerId))el('chart').releasePointerCapture(drag.pointerId);updateOrderKind();
   }
   function currentDrawings(){return safeList(state.drawings[drawingKey()]);}
@@ -260,7 +302,7 @@
       }
       if(selected){ctx.setLineDash([]);for(const p of (isPosition(item)?positionHandles(item):[a,b].filter(Boolean))){if(p.x===null||p.y===null)continue;ctx.fillStyle='#0d1420';ctx.strokeStyle='#70e4c2';ctx.lineWidth=2;ctx.beginPath();ctx.arc(p.x,p.y,5,0,Math.PI*2);ctx.fill();ctx.stroke();}}
     }
-    for(const level of draftLevels())if(Number.isFinite(level.y)&&level.y>=0&&level.y<=size.height){ctx.fillStyle=level.color;ctx.strokeStyle='#0d1420';ctx.lineWidth=2;ctx.beginPath();ctx.arc(size.width-18,level.y,5,0,Math.PI*2);ctx.fill();ctx.stroke();}
+    renderTicketHandles(size);
     if(pending){const p=point(pending);if(p.x!==null&&p.y!==null){ctx.fillStyle='#70e4c2';ctx.beginPath();ctx.arc(p.x,p.y,4,0,Math.PI*2);ctx.fill();}}
     ctx.restore();
   }
@@ -281,10 +323,6 @@
     primitive=new DrawingPrimitive();main.attachPrimitive(primitive);
     // Handle drawing anchors directly; chart click gestures can suppress quick clicks.
     el('chart').onpointerup=event=>{
-      if(ticketPick&&market&&event.button===0){
-        const p=pointerPoint(event),size=chart.paneSize(0);if(p.x<0||p.y<0||p.x>size.width||p.y>size.height)return;
-        const price=main.coordinateToPrice(p.y);if(price>0){el(ticketPick).value=planPrice(price).toFixed(market.digits);ticketPick=null;updateOrderKind();el('tool-hint').textContent='Draft updated · drag entry, SL or TP lines · review before sending';}return;
-      }
       if(tool==='cursor'||!market||event.button!==0)return;
       const rect=el('chart').getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top,size=chart.paneSize(0);
       if(x<0||y<0||x>size.width||y>size.height)return;
@@ -334,8 +372,8 @@
     else if(range)restoreDrawingRange(range);
     lastChartKey=workspaceKey();updateOrderHint();syncDraftLines();updateSelectionPrices();primitive.update();el('chart-empty').hidden=true;
   }
-  function setTool(value){ticketPick=null;finishDrawingDrag(true);selectDrawing(-1);tool=value;pending=null;document.querySelectorAll('[data-drawing]').forEach(b=>{b.classList.toggle('selected',b.dataset.drawing===value);b.setAttribute('aria-pressed',String(b.dataset.drawing===value));});chart?.applyOptions({handleScroll:value==='cursor',handleScale:{axisPressedMouseMove:true,mouseWheel:value==='cursor',pinch:value==='cursor'}});el('chart').style.cursor=value==='cursor'?'crosshair':'copy';el('tool-hint').textContent=value==='cursor'?'Scroll to zoom · click drawings to select · drag empty space to pan':value==='level'?'Click anywhere in the price pane to place a level':isPosition({type:value})?'Click to place entry · drag entry, target, stop or width handles':'Click two anchors · Escape cancels';primitive?.update();}
-  function clearMarket(){finishOrderDrag(true);ticketPick=null;if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;bars=[];lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
+  function setTool(value){finishDrawingDrag(true);selectDrawing(-1);tool=value;pending=null;document.querySelectorAll('[data-drawing]').forEach(b=>{b.classList.toggle('selected',b.dataset.drawing===value);b.setAttribute('aria-pressed',String(b.dataset.drawing===value));});chart?.applyOptions({handleScroll:value==='cursor',handleScale:{axisPressedMouseMove:true,mouseWheel:value==='cursor',pinch:value==='cursor'}});el('chart').style.cursor=value==='cursor'?'crosshair':'copy';el('tool-hint').textContent=value==='cursor'?'Scroll to zoom · click drawings to select · drag empty space to pan':value==='level'?'Click anywhere in the price pane to place a level':isPosition({type:value})?'Click to place entry · drag entry, target, stop or width handles':'Click two anchors · Escape cancels';primitive?.update();}
+  function clearMarket(){finishOrderDrag(true);if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;bars=[];lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
   function selectionChanged(){revision++;clearMarket();setTool('cursor');persist();renderWatchlist();refresh();}
   function chooseSymbol(symbol){if(!symbols.includes(symbol))return;el('symbol').value=symbol;el('search').value='';el('search-results').hidden=true;selectionChanged();}
   function renderWatchlist(){
@@ -410,16 +448,22 @@
   el('fit').onclick=()=>chart.timeScale().fitContent();el('latest').onclick=()=>chart.timeScale().scrollToRealTime();
   el('layout-save').onclick=()=>{saved.namedLayout=layout();persist();status('Layout saved. Use Restore layout to return to these settings.');};
   el('layout-restore').onclick=()=>{if(!saved.namedLayout){status('Save a layout first.');return;}applyLayout(saved.namedLayout);selectionChanged();buildChart();status('Saved layout restored.');};
-  el('pane').addEventListener('keydown',event=>{if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;if(event.key==='Escape'){ticketPick=null;finishOrderDrag(true);setTool('cursor');}if((event.key==='Delete'||event.key==='Backspace')&&selectedDrawing>=0){event.preventDefault();removeSelectedDrawing();}});
+  el('pane').addEventListener('keydown',event=>{if(event.target.closest('input,textarea,select,[contenteditable="true"]'))return;if(event.key==='Escape'){finishOrderDrag(true);setTool('cursor');}if((event.key==='Delete'||event.key==='Backspace')&&selectedDrawing>=0){event.preventDefault();removeSelectedDrawing();}});
   function updateOrderHint(){
+    if(market){el('sell-quote').textContent=Number(market.bid).toFixed(market.digits);el('buy-quote').textContent=Number(market.ask).toFixed(market.digits);}
+    document.querySelectorAll('[data-ticket-side]').forEach(button=>{button.setAttribute('aria-pressed',String(button.dataset.ticketSide===el('side').value));button.disabled=!!editingOrder||submitting||closing;});
+    el('volume-down').disabled=!!editingOrder;el('volume-up').disabled=!!editingOrder;
     const isPending=el('order-kind').value!=='MARKET',kind=inferredKind();el('pending-entry').hidden=!isPending;el('order-price').required=isPending;
     document.querySelectorAll('[data-ticket-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.ticketMode===el('order-kind').value)));
-    el('order-hint').textContent=!isPending?'Market order at the current quote. SL/TP draft lines can be dragged.':!kind?'Set an entry price or choose Set entry on chart. Limit/stop is automatic.':`${el('side').value} ${kind} inferred from entry vs current quote · GTC. Drag entry, SL or TP on the chart; review before sending.`;
+    el('inferred-type').textContent=isPending&&kind?(kind==='LIMIT'?'Limit':'Stop'):'';
+    el('order-hint').textContent=!isPending?'Drag SL / TP handles from the entry line to add protection.':!kind?'Drag the entry line or type its price.':`${el('side').value} ${kind} · GTC · Drag lines to adjust.`;
   }
-  function updateOrderKind(){updateOrderHint();invalidate();syncDraftLines();}
+  function updateOrderKind(){seedPendingEntry();updateOrderHint();invalidate();syncDraftLines();}
+  for(const side of ['SELL','BUY'])document.querySelector(`[data-ticket-side="${side}"]`).onclick=()=>{if(editingOrder||submitting||closing)return;el('side').value=side;updateOrderKind();};
+  for(const field of ['sl','tp'])el('clear-'+field).onclick=()=>{el(field).value='';updateOrderKind();};
+  for(const [id,direction] of [['volume-down',-1],['volume-up',1]])el(id).onclick=()=>{if(editingOrder)return;const min=market?.volume_min||.01,max=market?.volume_max||100,step=market?.volume_step||.01;el('volume').value=Number(Math.max(min,Math.min(max,(Number(el('volume').value)||min)+direction*step)).toFixed(8));updateOrderKind();};
   el('order-kind').onchange=updateOrderKind;el('side').onchange=updateOrderKind;
   document.querySelectorAll('[data-ticket-mode]').forEach(button=>button.onclick=()=>{el('order-kind').value=button.dataset.ticketMode;updateOrderKind();});
-  for(const [button,field] of [['pick-entry','order-price'],['pick-sl','sl'],['pick-tp','tp']])el(button).onclick=()=>{if(!market)return;if(field==='order-price'&&!editingOrder)el('order-kind').value='PENDING';setTool('cursor');ticketPick=field;el('show-ticket').checked=true;updateOrderKind();el('tool-hint').textContent='Click the chart to set '+(field==='order-price'?'pending entry':field.toUpperCase())+' · Escape cancels';};
   el('show-ticket').onchange=()=>{syncDraftLines();};
   el('ticket').oninput=()=>{updateOrderHint();invalidate();syncDraftLines();};
   el('ticket').onsubmit=async event=>{
@@ -441,11 +485,10 @@
   el('chart').addEventListener('pointerdown',event=>{
     if(tool!=='cursor'||!market||event.button!==0)return;
     const p=pointerPoint(event),size=chart.paneSize(0);if(p.x<0||p.y<0||p.x>size.width||p.y>size.height)return;
-    if(ticketPick)return;
     const hit=drawingHit(p),draft=draftLevelHit(p),broker=pendingLevelHit(p);
-    if(!submitting&&!closing&&!(selectedDrawing>=0&&hit)&&(draft||broker)){
+    if(!submitting&&!closing&&!hit&&(draft||broker)){
       const field=draft?.field||broker.field;if(!draft&&!beginOrderEdit(broker.order))return;
-      selectDrawing(-1);invalidate();orderDrag={field,original:el(field).value,pointerId:event.pointerId};el('chart').focus({preventScroll:true});el('chart').setPointerCapture(event.pointerId);event.preventDefault();event.stopImmediatePropagation();return;
+      startTicketDrag(event,field);return;
     }
     selectDrawing(hit?.index??-1);
     if(!hit)return;
@@ -457,7 +500,7 @@
   el('chart').addEventListener('pointermove',event=>{
     if(!market||tool!=='cursor')return;
     const p=pointerPoint(event);
-    if(orderDrag){event.preventDefault();event.stopImmediatePropagation();const size=chart.paneSize(0),price=main.coordinateToPrice(Math.max(0,Math.min(size.height,p.y)));if(price>0){el(orderDrag.field).value=planPrice(price).toFixed(market.digits);updateOrderKind();}el('chart').style.cursor='ns-resize';return;}
+    if(orderDrag){event.preventDefault();event.stopImmediatePropagation();const size=chart.paneSize(0),price=main.coordinateToPrice(Math.max(0,Math.min(size.height,p.y)));if(price>0){el(orderDrag.field).value=dragProtectionPrice(orderDrag.field,price).toFixed(market.digits);updateOrderKind();}el('chart').style.cursor='ns-resize';return;}
     if(!drawingDrag){const size=chart.paneSize(0);el('chart').style.cursor=p.x>=0&&p.y>=0&&p.x<size.width&&p.y<size.height&&draftLevelHit(p)||pendingLevelHit(p)?'ns-resize':drawingHit(p)?'move':'crosshair';return;}
     event.preventDefault();event.stopImmediatePropagation();
     const drag=drawingDrag,size=chart.paneSize(0),x=Math.max(0,Math.min(size.width,p.x)),y=Math.max(0,Math.min(size.height,p.y));

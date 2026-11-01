@@ -13,7 +13,7 @@ saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
 
-## Market workspace (v1.13.0)
+## Market workspace (v1.14.0)
 
 Open **Terminal → Connect & load markets**. This connects to your running MT5
 terminal and loads symbols in one step; the native MCP history API key is not
@@ -107,12 +107,19 @@ restricted to demo accounts on the backend.
   and freezes that type at review, then revalidates it before sending; it will
   not silently switch type if quotes cross the entry during confirmation.
   Orders use GTC and RETURN filling, subject to broker validation.
-- Use **Set entry / SL / TP on chart**, then click a price, or type exact prices.
-  **Show draft levels on chart** displays draggable lines with right-edge handles.
-  Dragging updates the ticket, snaps prices to the symbol tick size and invalidates
-  any old preview. It sends no broker request. Entry, SL and TP drafts can be
-  dragged in empty future space too. A selected drawing's handles retain priority
-  when it overlaps a ticket line. Escape cancels an in-progress drag or price pick.
+- The ticket uses live **Sell / Buy** quote cards and **Market / Pending** tabs.
+  Pending mode starts an entry draft near the current quote; drag its chart label
+  or type an exact price. Limit/stop is inferred automatically. Lot-size − / ＋
+  controls respect broker min/max/step. No separate level-setting buttons are used.
+- Drag the **SL** or **TP** handle beside the chart's entry label to add protection.
+  Continue dragging its label to adjust the price; × removes it from the chart and
+  ticket. Inputs remain available for exact prices. During a drag, protective
+  levels stay on the correct side of entry and respect broker stop distance;
+  prices snap to the symbol tick. Dragging the market entry creates a pending
+  draft. Escape restores a cancelled drag. These interactions only edit a draft
+  and invalidate any old preview; broker changes still require review and confirm.
+  Drawing selection takes priority over a coincident trade line; use its explicit
+  ticket-label grip to drag the trade level in that case.
 - On an existing pending order, use **Edit** or drag its entry/SL/TP line to stage
   an amendment. The ticket locks side and volume and requires **Review pending
   amendment**, then explicit confirmation. The backend preserves the ticket,

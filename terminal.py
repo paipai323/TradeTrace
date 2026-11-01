@@ -81,7 +81,7 @@ class Terminal:
         fields = ('ticket', 'symbol', 'type', 'volume', 'price_open', 'price_current', 'sl', 'tp', 'profit')
         return dict(bars=bars, interval_note=note,
                     bid=tick.bid, ask=tick.ask, quote_time=tick.time, digits=info.digits,
-                    tick_size=info.trade_tick_size,
+                    tick_size=info.trade_tick_size,stops_distance=info.trade_stops_level*info.point,
                     volume_min=info.volume_min, volume_max=info.volume_max, volume_step=info.volume_step,
                     balance=account.balance, equity=account.equity, margin_free=account.margin_free,
                     currency=account.currency, account=str(account.login), server=account.server,
