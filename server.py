@@ -5,8 +5,10 @@ import webbrowser
 import hashlib
 import urllib.request
 import base64
+import sys
+import threading
 from datetime import datetime, timezone, timedelta
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
 from core import Bridge, running_terminals
@@ -16,7 +18,8 @@ ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 terminal = Terminal(bridge)
 token = secrets.token_urlsafe(32)
-VERSION = '1.17.0'
+api_lock = threading.RLock()
+VERSION = '1.18.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
@@ -37,7 +40,16 @@ def existing_server(url):
         return False
 
 
+class AppServer(ThreadingHTTPServer):
+    # Finish active broker requests before closing the process.
+    daemon_threads = False
+
+
 class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(15)
+
     def send(self, value, status=200):
         raw = json.dumps(value, allow_nan=False).encode()
         self.send_response(status)
@@ -53,6 +65,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(health())
         routes = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
         routes['/connection.js'] = ('connection.js', 'text/javascript')
+        routes['/favicon.svg'] = ('favicon.svg', 'image/svg+xml')
         routes['/journal.js'] = ('journal.js', 'text/javascript')
         routes['/journal.css'] = ('journal.css', 'text/css')
         routes['/terminal.js'] = ('terminal.js', 'text/javascript')
@@ -75,6 +88,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_POST(self):
+        # MT5 and journal state remain serialized, while idle browser sockets
+        # cannot block assets, health checks or new connections.
+        with api_lock:
+            self.handle_api()
+
+    def handle_api(self):
         if self.headers.get('X-Replay-Token') != token:
             return self.send({'error': 'Unauthorized'}, 403)
         try:
@@ -168,10 +187,18 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--managed', action='store_true', help='Stop when the launcher sends stop or closes its input pipe.')
     args = parser.parse_args()
+    # NumPy/native DLL initialization can deadlock on Windows if the launcher's
+    # stdin watcher is already blocked in a CRT read. Load MT5 first, on the main
+    # thread; actual terminal/account connection still waits for an API request.
+    try:
+        import MetaTrader5
+    except ImportError:
+        pass  # The connection API retains its actionable Install.cmd error.
     url = f'http://127.0.0.1:{args.port}'
     try:
-        server = HTTPServer(('127.0.0.1', args.port), Handler)
+        server = AppServer(('127.0.0.1', args.port), Handler)
     except OSError:
         if existing_server(url):
             print(f'MT5 Replay {VERSION} is already running: {url}', flush=True)
@@ -184,6 +211,15 @@ if __name__ == '__main__':
     print(f'MT5 Replay {VERSION} ({BUILD}): {url}  (Ctrl+C to stop)', flush=True)
     if not args.no_browser:
         webbrowser.open(url)
+    if args.managed:
+        def watch_launcher():
+            # The anonymous pipe belongs only to the parent launcher. No HTTP
+            # shutdown endpoint is exposed to browser pages or other apps.
+            for command in sys.stdin:
+                if command.strip().lower() == 'stop':
+                    break
+            server.shutdown()
+        threading.Thread(target=watch_launcher, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

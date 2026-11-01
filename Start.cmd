@@ -6,5 +6,6 @@ if not exist .venv\Scripts\python.exe (
   pause
   exit /b 1
 )
-.venv\Scripts\python.exe server.py --port 8766
+title TradeTrace Control
+.venv\Scripts\python.exe launcher.py --port 8766
 if errorlevel 1 pause

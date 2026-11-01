@@ -7,13 +7,23 @@ The application lives at the repository root. Run `Install.cmd` once, then
 `static/`, and automated checks are in `tests/`. Local journal data and the
 encrypted API key stay in `.local/`, which is excluded from Git.
 
+`Start.cmd` opens an interactive **TradeTrace Server Control** console and starts
+the app and browser automatically. Use **1 Start**, **2 Stop**, **3 Restart**,
+**4 Open browser**, **5 Refresh status**, **6 View recent logs**, or **0 Exit**.
+Stop and Exit stop this console's web server; MT5 remains open and broker orders
+and positions remain unchanged. Requests already in progress finish before shutdown.
+Routine server logs go to `work/server.log`, keeping the controls readable.
+If upgrading with an older server console still running, close that old window
+first; the new launcher does not stop servers owned by another console.
+For a custom port, run `.venv\Scripts\python.exe launcher.py --port 8768`.
+
 If upgrading from the earlier `outputs/mt5-replay` layout, stop the old server
 first, move its `.local` folder to the repository root to keep your journal and
 saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
 
-## Market workspace (v1.16.0)
+## Market workspace (v1.18.0)
 
 The app automatically connects to the signed-in, running MT5 terminal on startup,
 using its last successful executable path when available, then loads broker
