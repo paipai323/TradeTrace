@@ -4,6 +4,7 @@ const path=require('node:path');
 const fs=require('node:fs');
 const {spawn}=require('node:child_process');
 const playwright=require('playwright');
+const demo=process.env.TRADETRACE_TEST_LIVE!=='1';
 const root=path.resolve(__dirname,'..'),port=18876,url=`http://127.0.0.1:${port}`;
 const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scripts/python.exe'),['server.py','--port',String(port),'--no-browser'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});
 const candles=Array.from({length:300},(_,i)=>[Date.UTC(2026,9,20)/1+300000*i,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100+i]);
@@ -22,8 +23,8 @@ let browser;
     else if(endpoint==='/api/journal/overview')value={accounts:[],account:null,trades:[]};
     else if(endpoint==='/api/connect'||endpoint==='/api/connect-all'){mockConnected=true;connectionCalls++;lastConnectionPath=body.path;value={account:'123',server:'Test-Demo',currency:'USD',path:'C:/Test/terminal64.exe',native:{state:'setup',message:'Test history connector optional',levels:[],key_saved:false}};}
     else if(endpoint==='/api/history')value={trades:[],skipped:0};
-    else if(endpoint==='/api/terminal/symbols')value={symbols:['EURUSD','GBPUSD','XAUUSD'],visible:['EURUSD','GBPUSD'],account:'123',server:'Test-Demo',currency:'USD',demo:true};
-    else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo:true,orders:pendingExists?[pendingSnapshot]:[],positions:positionClosed?[]:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,...positionLevels,profit:20}]};
+    else if(endpoint==='/api/terminal/symbols')value={symbols:['EURUSD','GBPUSD','XAUUSD'],visible:['EURUSD','GBPUSD'],account:'123',server:'Test-Demo',currency:'USD',demo};
+    else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo,orders:pendingExists?[pendingSnapshot]:[],positions:positionClosed?[]:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,...positionLevels,profit:20}]};
     else if(endpoint==='/api/terminal/closed')value={account:'123',server:'Test-Demo',currency:'USD',positions:[{id:'41',symbol:'EURUSD',side:'BUY',volume:.01,entry:1.1,exit:1.102,end:Date.now(),net:1.8}],note:'Last 30 days · test net P/L'};
     else if(endpoint==='/api/terminal/quotes')value={account:'123',server:'Test-Demo',quotes:Object.fromEntries(body.symbols.map(s=>[s,{bid:1.103,ask:1.1031,time:Date.now()/1000}]))};
     else if(endpoint==='/api/terminal/estimate'){draftEstimateCalls++;if(draftEstimateDelay)await new Promise(resolve=>setTimeout(resolve,draftEstimateDelay));const sign=body.side==='BUY'?1:-1,profit=price=>price?sign*(Number(price)-Number(body.entry))*Number(body.volume)*100000:null;value={account:'123',server:'Test-Demo',currency:'USD',sl:profit(Number(body.sl)),tp:profit(Number(body.tp))};}
@@ -194,6 +195,8 @@ let browser;
   // A field edit during a slow preview must never display a confirmation for old input.
   await page.locator('#terminal-preview').click();await page.locator('#terminal-volume').fill('0.02');await page.waitForTimeout(400);assert.equal(await page.locator('#terminal-submit').isVisible(),false);
   await page.locator('#terminal-preview').click();await page.locator('#terminal-submit').waitFor();assert.equal(submissions,0);assert.ok(previews>=2);
+  assert.match(await page.locator('#terminal-order-summary').textContent(),new RegExp(`${demo?'DEMO':'LIVE'} 123`));
+  assert.match(await page.locator('#terminal-submit').textContent(),new RegExp(demo?'demo':'LIVE'));
   await page.locator('#terminal-submit').click();await page.locator('#terminal-order-summary').filter({hasText:'Mocked execution'}).waitFor();assert.equal(submissions,1);
   await page.locator('#terminal-symbol').selectOption('EURUSD');await page.locator('#terminal-chart-title').filter({hasText:'EURUSD'}).waitFor();
   await page.locator('#terminal-layout-save').click();

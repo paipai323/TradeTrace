@@ -114,12 +114,16 @@ class TerminalTests(unittest.TestCase):
             with self.subTest(body=body),self.assertRaises(ValueError):self.terminal.position_preview(body)
         self.mt.order_send.assert_not_called()
 
-    def test_live_account_cannot_preview_or_submit(self):
+    def test_account_mode_change_requires_new_review_and_live_can_submit(self):
         p=self.terminal.preview(self.body)
         self.account.trade_mode=2
-        with self.assertRaisesRegex(ValueError,'demo'): self.terminal.submit(p)
-        with self.assertRaisesRegex(ValueError,'demo'): self.terminal.preview(self.body)
+        with self.assertRaisesRegex(ValueError,'Account changed'): self.terminal.submit(p)
         self.mt.order_send.assert_not_called()
+        p=self.terminal.preview(self.body)
+        self.assertFalse(p['demo'])
+        self.mt.order_send.assert_not_called()
+        self.terminal.submit(p)
+        self.mt.order_send.assert_called_once()
 
     def test_account_switch_and_expiration_block_submission(self):
         p=self.terminal.preview(self.body);self.account.login=456
@@ -174,7 +178,7 @@ class TerminalTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.terminal.submit(p)
         self.mt.order_send.assert_not_called()
 
-    def test_close_blocks_live_accounts_expired_previews_and_stale_quotes(self):
+    def test_close_blocks_expired_previews_and_stale_quotes_on_live_too(self):
         self.mt.positions_get.return_value=(Row(ticket=42,symbol='EURUSD',volume=.1,type=0),)
         p=self.terminal.close_preview({'position':'42'})
         self.terminal.previews[p['preview']]['expires']=0
@@ -182,7 +186,7 @@ class TerminalTests(unittest.TestCase):
         self.tick.time=time.time()-120
         with self.assertRaisesRegex(ValueError,'stale'):self.terminal.close_preview({'position':'42'})
         self.account.trade_mode=2
-        with self.assertRaisesRegex(ValueError,'demo'):self.terminal.close_preview({'position':'42'})
+        with self.assertRaisesRegex(ValueError,'stale'):self.terminal.close_preview({'position':'42'})
         self.mt.order_send.assert_not_called()
 
     def test_close_partial_or_unknown_result_is_never_retried(self):
@@ -237,10 +241,32 @@ class TerminalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'no longer pending'):self.terminal.submit(p)
         self.mt.order_send.assert_called_once()
 
-    def test_live_account_cannot_place_or_cancel_pending_orders(self):
+    def test_live_account_can_place_and_cancel_pending_orders(self):
         self.account.trade_mode=2
-        with self.assertRaisesRegex(ValueError,'demo'):self.terminal.preview(dict(symbol='EURUSD',side='BUY',order_kind='LIMIT',price=1.09,volume=.01))
-        with self.assertRaisesRegex(ValueError,'demo'):self.terminal.cancel_preview({'order':'88'})
+        pending=self.terminal.preview(dict(symbol='EURUSD',side='BUY',order_kind='LIMIT',price=1.09,volume=.01))
+        self.assertFalse(pending['demo'])
+        self.mt.orders_get.return_value=(Row(ticket=88,symbol='EURUSD',type=2),)
+        cancel=self.terminal.cancel_preview({'order':'88'})
+        self.assertFalse(cancel['demo'])
+        self.mt.order_send.assert_not_called()
+        self.terminal.submit(pending)
+        self.terminal.submit(cancel)
+        self.assertEqual(self.mt.order_send.call_count,2)
+
+    def test_live_close_and_protection_support_review_then_send(self):
+        self.account.trade_mode=2
+        self.position_fixture()
+        for preview in (self.terminal.position_preview(dict(position='42',sl=1.09,tp=1.12)), self.terminal.close_preview({'position':'42'})):
+            self.assertFalse(preview['demo'])
+            self.terminal.submit(preview)
+        self.assertEqual(self.mt.order_send.call_count,2)
+
+    def test_live_account_requires_mt5_trading_permissions(self):
+        self.account.trade_mode=2
+        for owner,field in [(self.account,'trade_allowed'),(self.account,'trade_expert'),(self.mt.terminal_info.return_value,'trade_allowed')]:
+            setattr(owner,field,False)
+            with self.assertRaisesRegex(ValueError,'Enable trading'):self.terminal.preview(self.body)
+            setattr(owner,field,True)
         self.mt.order_send.assert_not_called()
 
     def test_pending_mode_infers_kind_and_freezes_it_for_confirmation(self):

@@ -1,6 +1,6 @@
 # TradeTrace
 
-A private local-browser Windows workspace for MT5 market analysis, demo market orders, and a trading journal with historical trade replay.
+A private local-browser Windows workspace for MT5 market analysis, market orders, and a trading journal with historical trade replay.
 
 The application lives at the repository root. Run `Install.cmd` once, then
 `Start.cmd`. Python modules sit beside the launcher, browser assets are in
@@ -39,7 +39,7 @@ load and remains available for manual recovery. Multiple running installations
 still require an unambiguous saved/selected terminal path. An account change while
 the app is running clears reviews and requires manual reconnection rather than
 silently switching trading accounts. Startup and reconnect never submit orders.
-Live accounts support analysis; execution remains restricted to demo accounts.
+Demo and live accounts support execution. Reviews identify the connected account as DEMO or LIVE. Confirm only after checking the account, symbol, and order fields.
 
 - Locally bundled TradingView Lightweight Charts 5.0.9 provides candles/line view,
   crosshair OHLC, pan/zoom, price scaling, **Fit** history and **Latest** controls.
@@ -101,7 +101,7 @@ Live accounts support analysis; execution remains restricted to demo accounts.
   P&L. Without broker calculation data, price distances and risk/reward still work.
 - **Copy SL/TP to order ticket** copies the selected plan's side, levels and lots
   without submitting an order. The ticket is a market order at the current broker
-  price, not an order at the drawn entry; its existing demo-only review and
+  price, not an order at the drawn entry; its existing account-bound review and
   confirmation remain required. Plans save and remain shared across timeframes.
 - Settings, watchlists, visible time ranges, drawings and alerts autosave to
   browser local storage. **Save layout / Restore layout** keeps an explicit
@@ -114,7 +114,7 @@ Live accounts support analysis; execution remains restricted to demo accounts.
   approximately every two seconds only while the Terminal tab and browser page
   are visible and connected. There are no OS notifications or background alerts;
   a level crossed and reversed while the app is inactive may be missed.
-- The order ticket supports market buys/sells with optional SL/TP. **Review demo
+- The order ticket supports market buys/sells with optional SL/TP. **Review
   order** checks account permissions, quote freshness, lot step, price tick size,
   stop distance and broker order validation. **Confirm & send** uses a single-use,
   60-second preview; inputs changed during review invalidate confirmation. Quotes
@@ -159,12 +159,12 @@ Live accounts support analysis; execution remains restricted to demo accounts.
   and SL/TP, with entry lines on the current symbol chart. **Cancel** opens an
   account/ticket-specific review; confirming sends `TRADE_ACTION_REMOVE` once.
   An order that fills before cancellation is rejected as no longer pending;
-  inspect open positions. Both placement and cancellation are demo-account only.
+  inspect open positions. Both placement and cancellation are available on demo and live accounts.
   When the ticket is in pending mode, copying a chart plan also copies its entry;
   market mode continues to use current broker pricing.
 - **Close** on an open-position row reviews closing its entire volume. The review
   shows the exact ticket, symbol, account, volume and current closing quote; a
-  separate **Confirm close entire position** sends the request. Only demo accounts
+  separate **Confirm close entire position** sends the request. Demo and live accounts
   can use this action. Cancel, expiration or changes to the position invalidate
   the review. The backend names the exact MT5 position ticket, reverses its side,
   refreshes broker checks before sending and rejects changed volume/type/symbol.
@@ -275,7 +275,7 @@ node --check static/connection.js
 
 References: [native deal properties](https://www.mql5.com/en/docs/constants/tradingconstants/dealproperties), [Python deal history](https://www.mql5.com/en/docs/python_metatrader5/mt5historydealsget_py), [historical ticks](https://www.mql5.com/en/docs/python_metatrader5/mt5copyticksrange_py).
 
-Open positions support **Edit SL / TP** in the positions table or by clicking their chart label. Drag or type protection levels, or use × to remove a level, then review and confirm. Filled entry and volume remain fixed. Amendments are demo-only, rechecked against the current quote and broker rules, and rejected if the position changes after review.
+Open positions support **Edit SL / TP** in the positions table or by clicking their chart label. Drag or type protection levels, or use × to remove a level, then review and confirm. Filled entry and volume remain fixed. Amendments are account-bound, rechecked against the current quote and broker rules, and rejected if the position changes after review.
 
 Draft SL/TP chart labels show estimated signed P/L in account currency using MT5 broker profit calculations. Amounts update after entry, side, volume or protection changes, including single-leg drafts and position amendments. Estimates exclude commission, swap and slippage; previous amounts remain marked while an update is pending. Estimating never sends an order.
 
@@ -288,6 +288,10 @@ Terminal fits the browser viewport without page scrolling. Drag the dividers bes
 Open **Order ticket → Conditions**. The setup sidebar has separate **Order** and **Conditions** tabs, a shared status badge and risk/sizing card, and compact condition summaries. Expand one row at a time to edit it; timing/reset options are under a separate disclosure. **New setup** clears the condition and order draft, stops monitoring, resets execution to alert-only, and preserves the previous completed result under **Last setup result**. It never starts monitoring or sends an order. Existing broker positions and pending orders are unchanged.
 
 Each condition header has **Duplicate condition** (⧉), which inserts an independent copy immediately after the original, preserving its rule, timeframe, prices and row visibility. **Undo** beside Add condition restores up to 30 condition draft changes: additions, duplication, field/rule edits, chart price picking, completed drags, row visibility, deletion, reordering, or clearing the condition list. One focused text/number edit, dropdown selection, or whole drag is one undo step. Ctrl+Z works in the Conditions editor or a condition-focused chart; inside text/number fields, native browser text undo is preserved. History resets on reload or account/symbol changes. Undo restores condition rows only, never order-ticket fields, monitoring state, completed results, event history, or broker orders. Applied rules continue unchanged until an explicit Start.
+
+**Saved templates** stores up to 30 named setups locally in this browser, including conditions, order fields, sizing, and timing. Save/update replaces a template with the same name. Loading always creates an inactive alert-only draft, stops the current monitor, preserves the last result, and leaves broker positions/orders untouched. Automatic entry is never restored, and order draft overlays remain hidden until you use the Order ticket. Keep saved prices is available on the saved symbol; Reposition for this chart proportionally adapts the layout to the visible chart's price center and snaps prices to broker ticks. Review all condition/entry/SL/TP prices and lot limits before Start, especially across symbols. Templates survive reload; removing a template does not change the current draft or monitoring. Undo of loading restores condition rows only, not order fields or monitoring state.
+
+**Plain-language preview** reads the current draft in sequence, distinguishing live Bid conditions from newly completed candles and explaining crossings/sweeps and the final alert/review/automatic-entry action. It is a read-only draft description; it neither applies edits nor starts monitoring or sends an order.
 
 The ordered rule workflow comes from PriceConditionAlerts v1.32: add/remove/reorder conditions, choose live Bid or completed candles (M1/M5/M15/M30/H1/H4/D1), and enter a level or inclusive zone. Supported rules are zone entry/touch, trades above/below, sweeps returning across a level, candle closes above/below/inside, and first candle close above/below. Candle-only rules select completed-candle mode automatically.
 
@@ -309,7 +313,7 @@ Selecting a condition temporarily reveals its chart preview even when the global
 
 Adding a condition also creates a visible, tick-aligned starter price for its default level rule. Selecting any level rule fills a missing price using a visible prior zone midpoint, visible Bid, or the chart center. Existing level prices, drawing conversions, and restored drafts are preserved. Drag the level to your intended price before Start; the starter price does not identify a trading signal or start monitoring.
 
-Choose **Alert only**, **Prepare order for review**, or **Automatic demo entry**, configure the normal market/pending ticket and select ticket lots or automatic 2% equity sizing. Start snapshots the condition list and ticket. Later draft/ticket edits do not change that running snapshot; Start again applies them. Changing the action stops the monitor. Trade modes require SL and TP; live accounts retain analysis/alerts only. An empty list completes immediately on Start, including one immediate demo order attempt when automatic entry is explicitly armed. Start is the explicit authorization for automatic demo submission; review mode instead requires the normal confirmation button.
+Choose **Alert only**, **Prepare order for review**, or **Automatic entry**, configure the normal market/pending ticket and select ticket lots or automatic 2% equity sizing. Start snapshots the condition list and ticket. Later draft/ticket edits do not change that running snapshot; Start again applies them. Changing the action stops the monitor. Trade modes require SL and TP; demo and live accounts support execution. An empty list completes immediately on Start, including one immediate order attempt when automatic entry is explicitly armed. Start is the explicit authorization for automatic submission; review mode instead requires the normal confirmation button.
 
 Only the active step is observed; each step needs a separate fresh quote observation. Prior sweeps do not carry forward. Candle steps establish a baseline and wait for a new completed candle; the forming candle and old closed candles never trigger a step. A positive timeout runs from the first passed condition. Quote gaps reset progress and sweep memory. All modes are one-shot and require Start to rearm.
 

@@ -1,4 +1,4 @@
-"""Local market workspace and single-use, demo-only market order previews."""
+"""Local market workspace and single-use market order previews."""
 import math
 import secrets
 import time
@@ -19,8 +19,6 @@ class Terminal:
         if account is None or terminal is None or not terminal.connected:
             raise ValueError('MT5 is disconnected.')
         if trading:
-            if account.trade_mode != mt.ACCOUNT_TRADE_MODE_DEMO:
-                raise ValueError('This release only submits orders on demo accounts.')
             if not account.trade_allowed or not account.trade_expert or not terminal.trade_allowed or terminal.tradeapi_disabled:
                 raise ValueError('Enable trading and external Python trading in MT5 settings.')
         return mt, account
@@ -202,7 +200,7 @@ class Terminal:
         order_type=getattr(mt,'ORDER_TYPE_'+side+'_'+kind) if pending else mt.ORDER_TYPE_BUY if side=='BUY' else mt.ORDER_TYPE_SELL
         request = dict(action=mt.TRADE_ACTION_PENDING if pending else mt.TRADE_ACTION_DEAL, symbol=symbol, volume=volume,
                        type=order_type,price=price, sl=sl, tp=tp, deviation=20,
-                       type_time=mt.ORDER_TIME_GTC, type_filling=mt.ORDER_FILLING_RETURN if pending else filling, comment='TradeTrace demo close' if position is not None else 'TradeTrace demo')
+                       type_time=mt.ORDER_TIME_GTC, type_filling=mt.ORDER_FILLING_RETURN if pending else filling, comment='TradeTrace close' if position is not None else 'TradeTrace')
         if position is not None:request['position']=position
         if pending_order is not None:
             request=dict(action=mt.TRADE_ACTION_MODIFY,order=pending_order.ticket,symbol=symbol,price=price,sl=sl,tp=tp,
@@ -332,15 +330,15 @@ class Terminal:
         if len(self.previews) >= 100:
             raise ValueError('Too many previews. Wait a minute.')
         key = secrets.token_urlsafe(24)
-        self.previews[key] = dict(body=dict(body), request=dict(request), account=account.login, server=account.server, expires=now+60)
-        return dict(preview=key, request=request, order_kind=resolved_kind, account=str(account.login), server=account.server, expires_in=60)
+        self.previews[key] = dict(body=dict(body), request=dict(request), account=account.login, server=account.server, trade_mode=account.trade_mode, expires=now+60)
+        return dict(preview=key, request=request, order_kind=resolved_kind, account=str(account.login), server=account.server, demo=account.trade_mode == self.bridge.mt.ACCOUNT_TRADE_MODE_DEMO, expires_in=60)
 
     def submit(self, body):
         preview = self.previews.pop(str(body.get('preview', '')), None)
         if not preview or preview['expires'] < time.monotonic():
             raise ValueError('Preview expired or already used. Review a new order.')
         request, account = self.request(preview['body'])
-        if (account.login, account.server) != (preview['account'], preview['server']):
+        if (account.login, account.server, account.trade_mode) != (preview['account'], preview['server'], preview['trade_mode']):
             raise ValueError('Account changed. Review a new order.')
         closing=preview['body'].get('operation')=='close'
         if closing and any(request.get(field)!=preview['request'].get(field) for field in ('position','symbol','type','volume')):
