@@ -1,0 +1,69 @@
+"""Isolated browser fixture: production HTTP/monitor, fake broker. Not shipped as an app mode."""
+import argparse
+import copy
+import json
+from pathlib import Path
+import sys
+import threading
+import time
+from types import SimpleNamespace as Row
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+import server
+from condition_monitor import ConditionMonitor
+
+
+class FakeTerminal:
+    def __init__(self):
+        self.bid=1.103;self.account='123';self.sent=[];self.previews={};self.failure=None;self.preview_delay=0;self.preview_started=threading.Event()
+    def connection(self,trading=False):return None,Row(login=self.account,server='Test-Demo')
+    def symbols(self):return dict(symbols=['EURUSD','GBPUSD'],visible=['EURUSD'],account=self.account,server='Test-Demo',currency='USD',demo=True)
+    def market(self,body):
+        if self.failure:raise ValueError(self.failure)
+        bars=[[int(time.time()//300)*300000-(299-i)*300000,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100] for i in range(300)]
+        return dict(bars=bars,bid=self.bid,ask=self.bid+.0001,quote_time=time.time(),digits=5,tick_size=.00001,point=.00001,stops_distance=.0001,
+                    volume_min=.01,volume_max=10,volume_step=.01,balance=10000,equity=10000,margin_free=10000,currency='USD',account=self.account,server='Test-Demo',demo=True,trading_allowed=True,positions=[],orders=[])
+    def quotes(self,body):return dict(quotes={s:dict(bid=self.bid,ask=self.bid+.0001,time=time.time()) for s in body['symbols']})
+    def closed(self,body):return dict(positions=[])
+    def estimate(self,body):return dict(account=self.account,server='Test-Demo',currency='USD',sl=-10,tp=20)
+    def preview(self,body):
+        self.preview_started.set();time.sleep(self.preview_delay)
+        key='test-preview-'+str(len(self.previews)+len(self.sent));self.previews[key]=copy.deepcopy(body)
+        return dict(preview=key,account=self.account,server='Test-Demo',demo=True,expires_in=60,order_kind=body['order_kind'],
+                    request=dict(symbol=body['symbol'],volume=float(body['volume']),price=self.bid+.0001,sl=float(body['sl']),tp=float(body['tp'])))
+    def submit(self,body):
+        saved=self.previews.pop(body['preview']);self.sent.append(saved)
+        return dict(retcode=10009,comment='Fake broker execution',order=str(len(self.sent)),deal=str(len(self.sent)),volume=float(saved['volume']),price=self.bid+.0001,operation='open',journal_recorded=True,message='Fake broker only')
+
+
+terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1)
+
+
+class Handler(server.Handler):
+    def do_GET(self):
+        if self.path=='/test/preview-started':return self.send({'started':terminal.preview_started.is_set()})
+        return super().do_GET()
+
+    def handle_api(self):
+        if self.headers.get('X-Replay-Token')!=server.token:return super().handle_api()
+        basic={'/api/session':dict(connected=True,key_saved=False,account='123',server='Test-Demo',currency='USD',direct=False),
+               '/api/connect-all':dict(account='123',server='Test-Demo',currency='USD',native={}),
+               '/api/journal/overview':dict(accounts=[],account=None,trades=[],condition_entries=[]),'/api/history':dict(trades=[],skipped=0)}
+        if self.path in basic:
+            self.rfile.read(int(self.headers['Content-Length']));return self.send(basic[self.path])
+        if self.path=='/api/test/feed':
+            body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if 'bid' in body:terminal.bid=body['bid']
+            if 'account' in body:terminal.account=body['account']
+            if 'failure' in body:terminal.failure=body['failure']
+            if 'preview_delay' in body:terminal.preview_delay=body['preview_delay'];terminal.preview_started.clear()
+            if body.get('expire') and server.condition_monitor.run:server.condition_monitor.run['review_deadline']=time.time()-1
+            return self.send(dict(sent=len(terminal.sent),state=server.condition_monitor.status()))
+        return super().handle_api()
+
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,required=True);args=parser.parse_args()
+    app=server.AppServer(('127.0.0.1',args.port),Handler);server.condition_monitor.launch()
+    print(f'http://127.0.0.1:{args.port}',flush=True)
+    try:app.serve_forever()
+    finally:app.server_close();server.condition_monitor.close()

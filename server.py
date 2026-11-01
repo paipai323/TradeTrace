@@ -13,17 +13,19 @@ from pathlib import Path
 from urllib.parse import urlparse
 from core import Bridge, running_terminals
 from terminal import Terminal
+from condition_monitor import ConditionMonitor
 
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 terminal = Terminal(bridge)
 token = secrets.token_urlsafe(32)
 api_lock = threading.RLock()
+condition_monitor = ConditionMonitor(terminal, api_lock)
 VERSION = '1.18.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/terminal-conditions.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['condition_engine.py', 'condition_monitor.py', 'timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/terminal-conditions.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -89,6 +91,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_POST(self):
+        # Record Stop intent before waiting for an in-flight broker read/preview.
+        # Only the normal serialized handler mutates monitor/broker state.
+        if self.path == '/api/terminal/conditions/stop' and self.headers.get('X-Replay-Token') == token:
+            try:
+                length=int(self.headers.get('Content-Length',0))
+                if not 0<length<32768:raise ValueError('Invalid stop request length')
+                body=json.loads(self.rfile.read(length))
+                if not isinstance(body,dict):raise ValueError('Invalid stop request')
+                condition_monitor.signal_stop(body)
+                with api_lock:self.send(condition_monitor.stop(body))
+            except (ValueError,TypeError) as error:self.send({'error':str(error)},400)
+            return
         # MT5 and journal state remain serialized, while idle browser sockets
         # cannot block assets, health checks or new connections.
         with api_lock:
@@ -103,7 +117,13 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length < limit:
                 raise ValueError('Invalid request length')
             body = json.loads(self.rfile.read(length))
-            if self.path == '/api/terminal/symbols':
+            if self.path == '/api/terminal/conditions/start':
+                result = condition_monitor.start(body)
+            elif self.path == '/api/terminal/conditions/status':
+                result = condition_monitor.status(body)
+            elif self.path == '/api/terminal/conditions/stop':
+                result = condition_monitor.stop(body)
+            elif self.path == '/api/terminal/symbols':
                 result = terminal.symbols()
             elif self.path == '/api/terminal/quotes':
                 result = terminal.quotes(body)
@@ -125,8 +145,15 @@ class Handler(BaseHTTPRequestHandler):
                 result = terminal.modify_preview(body)
             elif self.path == '/api/terminal/position-preview':
                 result = terminal.position_preview(body)
+            elif self.path == '/api/terminal/condition-plan':
+                result = terminal.condition_plan(body)
             elif self.path == '/api/terminal/submit':
-                result = terminal.submit(body)
+                try:
+                    result = terminal.submit(body)
+                except Exception as error:
+                    condition_monitor.record_submission(body,error=str(error))
+                    raise
+                condition_monitor.record_submission(body,result=result)
             elif self.path == '/api/journal/overview':
                 result = bridge.journal.overview(body.get('account') or bridge.journal_account)
             elif self.path == '/api/journal/entry':
@@ -212,6 +239,7 @@ if __name__ == '__main__':
             raise SystemExit(0)
         print(f'Port {args.port} is occupied by an older replay version or another app. Close the old replay console and run Start.cmd again. No process was stopped.', flush=True)
         raise SystemExit(1)
+    condition_monitor.launch()
     url = f'http://127.0.0.1:{server.server_port}'
     print(f'MT5 Replay {VERSION} ({BUILD}): {url}  (Ctrl+C to stop)', flush=True)
     if not args.no_browser:
@@ -223,6 +251,7 @@ if __name__ == '__main__':
             for command in sys.stdin:
                 if command.strip().lower() == 'stop':
                     break
+            condition_monitor.shutdown.set();condition_monitor.signal_stop({})
             server.shutdown()
         threading.Thread(target=watch_launcher, daemon=True).start()
     try:
@@ -230,6 +259,8 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         pass
     finally:
+        condition_monitor.shutdown.set();condition_monitor.signal_stop({})
         server.server_close()
+        condition_monitor.close()
         if bridge.mt:
             bridge.mt.shutdown()

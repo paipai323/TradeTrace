@@ -110,3 +110,8 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 #terminal-condition-template-status{font-size:10px;line-height:1.6;color:#e4bd70}#terminal-condition-template-save{width:100%}#terminal-condition-preview-text{border-left:2px solid #3c7163;padding:8px 10px;background:#10221d;font-size:11px;line-height:1.8;max-height:220px;overflow:auto;color:#c4d7cf}
 
 #terminal-setup-readiness-checks{padding-left:18px;font-size:11px;line-height:1.6}#terminal-setup-readiness-checks li{margin:5px 0}#terminal-setup-readiness-checks [data-state="blocked"],#terminal-setup-readiness-account[data-live="true"]{color:#ffbf69}#terminal-setup-readiness-checks [data-state="ready"]{color:#7edac4}#terminal-setup-readiness-account{font-weight:700}
+
+#terminal-auto-plan-enabled{display:inline-block;width:auto;margin-right:6px}#terminal-auto-plan-status{font-size:10px;line-height:1.6;color:#e4bd70}
+.terminal-auto-plan-toggle{display:flex!important;align-items:flex-start;gap:9px;border:1px solid #3c7163;border-radius:6px;background:#10221d;padding:12px!important;color:#c4e8dd;font-size:11px!important;line-height:1.6}#terminal-auto-plan-enabled{display:inline-block!important;width:16px!important;height:16px!important;padding:0!important;margin:2px 0 0!important;flex:none}
+
+.terminal-condition-starters{border:1px solid #3c7163;border-radius:6px;padding:12px;background:#10221d;margin:10px 0}.terminal-condition-starters>strong{font-size:12px;color:#b5e8d8}#terminal-condition-starter-load{width:100%}#terminal-condition-starter-status{font-size:10px;line-height:1.6;color:#e4bd70}

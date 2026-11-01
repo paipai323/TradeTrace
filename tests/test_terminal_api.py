@@ -7,6 +7,16 @@ import server
 
 
 class TerminalApiTests(unittest.TestCase):
+    def test_monitor_routes_are_authenticated_and_dispatch_to_server_runner(self):
+        monitor=Mock()
+        with patch.object(server,'condition_monitor',monitor):
+            for route in ('start','status','stop'):
+                getattr(monitor,route).return_value={'run':None}
+                self.assertEqual(self.post('/api/terminal/conditions/'+route,{}),(200,{'run':None}))
+                self.assertEqual(self.post('/api/terminal/conditions/'+route,{},token='wrong')[0],403)
+                getattr(monitor,route).assert_called_once_with({})
+            monitor.signal_stop.assert_called_once_with({})
+
     def post(self, path, body, token=server.token):
         raw=json.dumps(body).encode()
         handler=server.Handler.__new__(server.Handler)
@@ -24,6 +34,9 @@ class TerminalApiTests(unittest.TestCase):
                 self.assertEqual(self.post('/api/terminal/'+route,{'symbol':'EURUSD'}),(200,{'route':route}))
                 self.assertEqual(self.post('/api/terminal/'+route,{},token='wrong')[0],403)
                 getattr(terminal,route).assert_called_once()
+            terminal.condition_plan.return_value={'preview':'calculated'}
+            self.assertEqual(self.post('/api/terminal/condition-plan',{'symbol':'EURUSD'}),(200,{'preview':'calculated'}))
+            self.assertEqual(self.post('/api/terminal/condition-plan',{},token='wrong')[0],403)
             terminal.close_preview.return_value={'preview':'close-token'}
             self.assertEqual(self.post('/api/terminal/close-preview',{'position':'42'}),(200,{'preview':'close-token'}))
             self.assertEqual(self.post('/api/terminal/close-preview',{'position':'42'},token='wrong')[0],403)

@@ -93,6 +93,83 @@ class Terminal:
                                  price=o.price_open,sl=o.sl,tp=o.tp) for o in orders],
                     positions=[{k: str(getattr(p,k)) if k == 'ticket' else getattr(p,k) for k in fields} for p in positions])
 
+    def condition_plan(self, body):
+        """Calculate a condition order, validate it and issue a review token. Never send."""
+        mt,account=self.connection(trading=True)
+        if (str(account.login),account.server)!=(str(body.get('expected_account')),body.get('expected_server')):
+            raise ValueError('Condition account changed. Start again.')
+        symbol,side=str(body.get('symbol','')),body.get('side')
+        info,tick=mt.symbol_info(symbol),mt.symbol_info_tick(symbol)
+        if info is None or tick is None or side not in ('BUY','SELL'):
+            raise ValueError('Select a valid symbol and side.')
+        if time.time()-tick.time>30 or tick.time>time.time()+5 or not (0<tick.bid<=tick.ask):
+            raise ValueError('Quote is stale or invalid.')
+        settings=body.get('auto_plan')
+        if not isinstance(settings,dict):raise ValueError('Automatic trade plan settings are missing.')
+        def number(key,low,high):
+            try:value=float(settings.get(key))
+            except (TypeError,ValueError):raise ValueError('Invalid automatic plan '+key+'.')
+            if not math.isfinite(value) or not low<=value<=high:raise ValueError('Invalid automatic plan '+key+'.')
+            return value
+        risk_percent=number('risk',.01,2);multiple=number('rr',.1,100);buffer=number('buffer',0,1000000)
+        if not buffer.is_integer():raise ValueError('SL buffer must be a whole number of broker ticks.')
+        sensitivity=number('sensitivity',1,10)
+        if not sensitivity.is_integer() or settings.get('timeframe') not in ('M1','M5','M15','M30','H1','H4','D1'):
+            raise ValueError('Choose a valid swing timeframe and sensitivity.')
+        entry_mode=settings.get('entry')
+        if entry_mode not in ('MARKET','RETEST'):raise ValueError('Choose market or retest limit entry.')
+        if not all(math.isfinite(v) and v>0 for v in (info.trade_tick_size,info.point,info.volume_min,info.volume_step,info.volume_max,account.equity)):
+            raise ValueError('Broker contract or equity is unavailable.')
+        unit=info.trade_tick_size;direction=1 if side=='BUY' else -1
+        def rounded(value,up):return round((math.ceil(value/unit-1e-8) if up else math.floor(value/unit+1e-8))*unit,10)
+        swing=body.get('stop_swing') or {}
+        try:anchor=float(swing['price']);confirmed=float(swing['confirmed_time']);swing_time=float(swing['time'])
+        except (KeyError,ValueError,TypeError):raise ValueError('A confirmed stop swing is unavailable.')
+        if not all(math.isfinite(v) for v in (anchor,confirmed,swing_time)) or anchor<=0 or not swing_time<confirmed<=tick.time:
+            raise ValueError('A valid confirmed stop swing is required.')
+        stop=rounded(anchor-direction*buffer*unit,side=='SELL')
+        expires_at=None
+        if entry_mode=='MARKET':entry=tick.ask if side=='BUY' else tick.bid
+        else:
+            try:entry=rounded(float(body.get('retest_level')),side=='SELL')
+            except (ValueError,TypeError,OverflowError):raise ValueError('A matching BOS/MS retest level is unavailable.')
+            if not math.isfinite(entry) or entry<=0:raise ValueError('A matching BOS/MS retest level is unavailable.')
+            if (side=='BUY' and entry>=tick.ask) or (side=='SELL' and entry<=tick.bid):
+                raise ValueError('Retest price has already been reached or is on the wrong side. No stop-order fallback.')
+            expiry=number('expiry',1,1440)
+            if not expiry.is_integer():raise ValueError('Expiry must be whole minutes.')
+            if not int(getattr(info,'expiration_mode',0))&4:raise ValueError('Broker does not support specified pending-order expiry for this symbol.')
+            expires_at=int(time.time()+expiry*60)
+        adverse=entry+direction*20*info.point if entry_mode=='MARKET' else entry
+        distance=direction*(adverse-stop)
+        if stop<=0 or distance<=0 or direction*(entry-stop)<=0:raise ValueError('Confirmed swing and buffer do not give a valid stop beyond entry.')
+        target=rounded(adverse+direction*multiple*distance,side=='BUY')
+        if target<=0:raise ValueError('Calculated target is not a valid positive price.')
+        order_type=mt.ORDER_TYPE_BUY if side=='BUY' else mt.ORDER_TYPE_SELL
+        def loss(volume):
+            value=mt.order_calc_profit(order_type,symbol,volume,adverse,stop)
+            if value is None or not math.isfinite(value) or value>=0:raise ValueError('Broker risk calculation unavailable or stop is not a loss.')
+            return abs(value)
+        minimum_loss=loss(info.volume_min);budget=account.equity*risk_percent/100
+        raw=min(info.volume_max,budget/minimum_loss*info.volume_min)
+        volume=round(math.floor(raw/info.volume_step+1e-9)*info.volume_step,8)
+        if volume<info.volume_min:raise ValueError('Minimum lot exceeds the selected risk budget.')
+        modeled=loss(volume)
+        if modeled>budget+1e-8:raise ValueError('Rounded lots exceed the selected risk budget.')
+        reward=mt.order_calc_profit(order_type,symbol,volume,adverse,target)
+        if reward is None or not math.isfinite(reward) or reward<=0:raise ValueError('Broker reward calculation unavailable.')
+        calculation=dict(entry=entry,modeled_entry=adverse,sl=stop,tp=target,volume=volume,risk_percent=risk_percent,
+                         budget=budget,modeled_loss=modeled,modeled_reward=reward,rr=multiple,currency=account.currency,
+                         stop_swing=dict(swing),buffer_ticks=buffer,expires_at=expires_at)
+        setup={**(body.get('condition_setup') or {}),'automatic_plan':calculation}
+        planned={**body,'condition_entry':True,'condition_risk_auto':True,'condition_risk_percent':risk_percent,
+                 'condition_risk_budget':budget,'condition_min_rr':multiple,'condition_setup':setup,
+                 'order_kind':'MARKET' if entry_mode=='MARKET' else 'LIMIT','price':entry,'sl':stop,'tp':target,'volume':volume}
+        if expires_at:planned['condition_expires_at']=expires_at
+        planned=json.loads(json.dumps(planned,allow_nan=False))
+        result=self.preview(planned);result['calculation']=calculation
+        return result
+
     def plan(self, body):
         """Estimate a hypothetical position; never validates or sends an order."""
         mt,account=self.connection()
@@ -205,6 +282,11 @@ class Terminal:
         request = dict(action=mt.TRADE_ACTION_PENDING if pending else mt.TRADE_ACTION_DEAL, symbol=symbol, volume=volume,
                        type=order_type,price=price, sl=sl, tp=tp, deviation=20,
                        type_time=mt.ORDER_TIME_GTC, type_filling=mt.ORDER_FILLING_RETURN if pending else filling, comment='TradeTrace close' if position is not None else 'TradeTrace')
+        if body.get('condition_expires_at') is not None:
+            expires=body['condition_expires_at']
+            if not pending or not isinstance(expires,int) or expires<=time.time():raise ValueError('Retest order expiry has passed. Start again.')
+            if not int(getattr(info,'expiration_mode',0))&4:raise ValueError('Broker does not support specified pending-order expiry.')
+            request['type_time']=mt.ORDER_TIME_SPECIFIED;request['expiration']=expires
         if position is not None:request['position']=position
         if pending_order is not None:
             request=dict(action=mt.TRADE_ACTION_MODIFY,order=pending_order.ticket,symbol=symbol,price=price,sl=sl,tp=tp,
@@ -215,10 +297,19 @@ class Terminal:
             if not sl or not tp:
                 raise ValueError('Condition entries require SL and TP.')
             if body.get('condition_risk_auto'):
-                adverse = price + (1 if side == 'BUY' else -1) * 20 * info.point
+                percent=float(body.get('condition_risk_percent',2))
+                if not math.isfinite(percent) or not .01<=percent<=2:raise ValueError('Choose .01–2% equity risk.')
+                adverse = price if pending and body.get('condition_min_rr') else price + (1 if side == 'BUY' else -1) * 20 * info.point
                 loss = mt.order_calc_profit(mt.ORDER_TYPE_BUY if side == 'BUY' else mt.ORDER_TYPE_SELL, symbol, volume, adverse, sl)
-                if loss is None or not math.isfinite(loss) or not math.isfinite(account.equity) or account.equity <= 0 or abs(loss) > account.equity * .02:
-                    raise ValueError('Current modeled loss exceeds 2% equity or is unavailable. Start again to resize.')
+                original_budget=float(body.get('condition_risk_budget',account.equity*percent/100))
+                budget=min(account.equity*percent/100,original_budget)
+                if loss is None or not math.isfinite(loss) or loss>=0 or not math.isfinite(original_budget) or not math.isfinite(budget) or budget<=0 or not math.isfinite(account.equity) or account.equity <= 0 or abs(loss) > budget+1e-8:
+                    raise ValueError(f'Current modeled loss exceeds {percent:g}% equity budget or is unavailable. Start again to resize.')
+                if body.get('condition_min_rr'):
+                    multiple=float(body['condition_min_rr']);direction=1 if side=='BUY' else -1
+                    risk=direction*(adverse-sl);reward=direction*(tp-adverse)
+                    if not math.isfinite(multiple) or multiple<=0 or risk<=0 or reward/risk+1e-7<multiple:
+                        raise ValueError('Price moved beyond the reviewed reward/risk plan. Start again to calculate a new plan.')
         checked = mt.order_check(request)
         if checked is None or checked.retcode != 0:
             raise ValueError('Broker order check failed: ' + (checked.comment if checked else str(mt.last_error())))
