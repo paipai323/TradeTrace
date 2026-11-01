@@ -33,3 +33,15 @@ for(const rule of Object.keys(C.rules)){
  assert.equal(typeof C.matches(r,p,b,{}),'boolean');
 }
 console.log('Condition sequence tests passed');
+assert.match(C.fieldErrors(live('TRADED_ABOVE',{level:0})).level,/positive/);
+assert.deepEqual(C.fieldErrors(live('TRADED_ABOVE')),{});
+const invalidZone=C.fieldErrors(live('ZONE_TOUCH',{low:110,high:90}));assert.ok(invalidZone.low&&invalidZone.high);
+assert.equal(C.fieldErrors(live('TRADED_ABOVE',{low:110,high:90})).low,undefined,'unused zone fields do not invalidate a level rule');
+s=new C.Sequence([live('TRADED_ABOVE'),live('TRADED_BELOW')],{timeout:5,gap:300});
+tick(s,99,1);tick(s,101,2);assert.deepEqual(s.events,[{type:'passed',index:0}]);
+tick(s,101,8);assert.deepEqual(s.events,[{type:'reset',reason:'timeout',seconds:6}]);
+s=new C.Sequence([live('SWEEP_ABOVE_REJECT')],{gap:3});tick(s,99,1);tick(s,101,2);tick(s,99,9);
+assert.deepEqual(s.events,[{type:'reset',reason:'quote-gap',seconds:7}]);
+tick(s,101,10);tick(s,99,11);assert.deepEqual(s.events,[{type:'passed',index:0}]);
+tick(s,99,1000);assert.deepEqual(s.events,[],'completed sequences emit no resets or repeated passes');
+console.log('Inline validation and event metadata tests passed');

@@ -5,11 +5,22 @@
   const frames=['M1','M5','M15','M30','H1','H4','D1'];
   const zone=r=>['ZONE_ENTER','ZONE_TOUCH','CLOSE_IN_ZONE'].includes(r);
   const candleOnly=r=>r.startsWith('CLOSE_')||r.startsWith('CROSS_');
+  function fieldErrors(row){
+    const errors={},positive=value=>Number.isFinite(value)&&value>0;
+    if(!Object.hasOwn(rules,row.rule))errors.rule='Choose a valid rule.';
+    if(!['LIVE','CANDLE'].includes(row.mode))errors.mode='Choose Live Bid or completed candles.';
+    if(!frames.includes(row.timeframe))errors.timeframe='Choose a supported timeframe.';
+    if(row.mode==='LIVE'&&typeof row.rule==='string'&&candleOnly(row.rule))errors.mode='This rule requires completed candles.';
+    if(zone(row.rule)){
+      if(!positive(row.low))errors.low='Enter a positive zone low.';
+      if(!positive(row.high))errors.high='Enter a positive zone high.';
+      if(positive(row.low)&&positive(row.high)&&row.low>=row.high){errors.low='Zone low must be below zone high.';errors.high='Zone high must be above zone low.';}
+    }else if(!positive(row.level))errors.level='Enter a positive price level.';
+    return errors;
+  }
   function validate(rows){
     for(const [i,r] of rows.entries()){
-      if(!Object.hasOwn(rules,r.rule)||!['LIVE','CANDLE'].includes(r.mode)||!frames.includes(r.timeframe))throw Error(`Condition ${i+1}: choose a rule, mode and timeframe.`);
-      if(r.mode==='LIVE'&&candleOnly(r.rule))throw Error(`Condition ${i+1}: this rule requires completed candles.`);
-      if(zone(r.rule)?!(Number.isFinite(r.low)&&Number.isFinite(r.high)&&r.low>0&&r.high>r.low):!(Number.isFinite(r.level)&&r.level>0))throw Error(`Condition ${i+1}: enter a positive level or low < high zone.`);
+      const errors=fieldErrors(r);if(Object.keys(errors).length)throw Error(`Condition ${i+1}: ${Object.values(errors)[0]}`);
     }
     return rows;
   }
@@ -36,10 +47,11 @@
     constructor(rows,{timeout=0,gap=300}={}){this.rows=structuredClone(validate(rows));this.timeout=timeout;this.gap=gap;this.reset();this.done=!rows.length;}
     reset(){if(this.done)return;this.index=0;this.memory={};this.previous=null;this.lastTime=null;this.started=null;this.candle=null;this.done=false;}
     observe({bid,time,candles=[]}){
+      this.events=[];
       if(this.done||!Number.isFinite(bid)||bid<=0||!Number.isFinite(time))return false;
       if(this.lastTime!==null&&time<=this.lastTime)return false;
-      if(this.lastTime!==null&&this.gap>0&&time-this.lastTime>this.gap)this.reset();
-      if(this.started!==null&&this.timeout>0&&time-this.started>this.timeout)this.reset();
+      if(this.lastTime!==null&&this.gap>0&&time-this.lastTime>this.gap){const seconds=time-this.lastTime;this.reset();this.events.push({type:'reset',reason:'quote-gap',seconds});}
+      if(this.started!==null&&this.timeout>0&&time-this.started>this.timeout){const seconds=time-this.started;this.reset();this.events.push({type:'reset',reason:'timeout',seconds});}
       this.lastTime=time;
       const r=this.rows[this.index];if(!r)return false;
       const latest=candles.at(-1);
@@ -53,11 +65,12 @@
       }
       if(!matches(r,p,b,this.memory))return false;
       if(this.index===0)this.started=time;
+      this.events.push({type:'passed',index:this.index});
       this.index++;this.memory={};this.candle=null;
       this.done=this.index===this.rows.length;
       return this.done;
     }
   }
-  const api={rules,frames,zone,candleOnly,validate,matches,Sequence};
+  const api={rules,frames,zone,candleOnly,fieldErrors,validate,matches,Sequence};
   if(typeof module==='object')module.exports=api;else root.TerminalConditions=api;
 })(typeof window==='object'?window:globalThis);
