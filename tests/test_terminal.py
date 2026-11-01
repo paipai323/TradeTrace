@@ -34,6 +34,51 @@ class TerminalTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.terminal.submit(p)
         self.mt.order_send.assert_called_once()
 
+    def position_fixture(self, side=0):
+        self.mt.TRADE_ACTION_SLTP=6
+        position=Row(ticket=42,symbol='EURUSD',volume=.1,type=side,price_open=1.09 if side==0 else 1.12,sl=0,tp=0)
+        self.mt.positions_get.return_value=(position,)
+        return position
+
+    def test_position_protection_only_exact_ticket_and_profit_stops(self):
+        for side,sl,tp in [(0,1.099,1.11),(1,1.101,1.09)]:
+            self.position_fixture(side)
+            self.mt.order_send.reset_mock()
+            preview=self.terminal.position_preview(dict(position='42',sl=sl,tp=tp))
+            self.assertEqual(preview['request'],dict(action=6,position=42,symbol='EURUSD',sl=sl,tp=tp))
+            self.mt.order_send.assert_not_called()
+            self.assertEqual(self.terminal.submit(preview)['operation'],'position-sltp')
+            self.mt.order_send.assert_called_once_with(preview['request'])
+            with self.assertRaises(ValueError):self.terminal.submit(preview)
+
+    def test_position_protection_removal_and_concurrent_changes(self):
+        for field,value in [('sl',1.09),('tp',1.12),('volume',.2),('type',1),('symbol','GBPUSD'),('price_open',1.08)]:
+            position=self.position_fixture()
+            preview=self.terminal.position_preview(dict(position='42',sl=0,tp=0))
+            self.assertEqual(preview['request']['sl'],0)
+            setattr(position,field,value)
+            with self.assertRaisesRegex(ValueError,'changed'):self.terminal.submit(preview)
+        self.mt.order_send.assert_not_called()
+
+    def test_position_protection_revalidates_before_send(self):
+        for failure in ['gone','stale','live','expired','broker']:
+            self.account.trade_mode=0;self.tick.time=time.time();self.mt.order_check.return_value=Row(retcode=0)
+            self.position_fixture()
+            preview=self.terminal.position_preview(dict(position='42',sl=1.09,tp=1.12))
+            if failure=='gone':self.mt.positions_get.return_value=()
+            elif failure=='stale':self.tick.time=0
+            elif failure=='live':self.account.trade_mode=2
+            elif failure=='expired':self.terminal.previews[preview['preview']]['expires']=0
+            else:self.mt.order_check.return_value=Row(retcode=10016,comment='Invalid stops')
+            with self.assertRaises(ValueError):self.terminal.submit(preview)
+        self.mt.order_send.assert_not_called()
+
+    def test_position_protection_invalid_levels_and_tickets(self):
+        self.position_fixture()
+        for body in [dict(position='no'),dict(position='42',sl=float('nan')),dict(position='42',tp=-1),dict(position='42',sl=1.090001),dict(position='42',sl=1.11),dict(position='42',tp=1.09)]:
+            with self.subTest(body=body),self.assertRaises(ValueError):self.terminal.position_preview(body)
+        self.mt.order_send.assert_not_called()
+
     def test_live_account_cannot_preview_or_submit(self):
         p=self.terminal.preview(self.body)
         self.account.trade_mode=2

@@ -118,6 +118,8 @@ class Terminal:
                     note='Hypothetical gross estimate; excludes commission, swap and slippage. This is not an open position.')
 
     def request(self, body, position=None, pending_order=None):
+        if body.get('operation') == 'position-sltp':
+            return self.position_request(body)
         if body.get('operation') == 'close':
             return self.close_request(body)
         if body.get('operation') == 'cancel':
@@ -174,6 +176,39 @@ class Terminal:
         if checked is None or checked.retcode != 0:
             raise ValueError('Broker order check failed: ' + (checked.comment if checked else str(mt.last_error())))
         return request, account
+
+    def position_request(self, body):
+        mt,account=self.connection(trading=True)
+        ticket=str(body.get('position',''))
+        if not ticket.isdigit() or not 0<int(ticket)<2**64:raise ValueError('Invalid position ticket.')
+        positions=mt.positions_get(ticket=int(ticket))
+        if positions is None:raise ValueError('Cannot read the position. Check MT5.')
+        position=next((p for p in positions if p.ticket==int(ticket)),None)
+        if position is None:raise ValueError('This position is no longer open.')
+        if position.type not in (mt.POSITION_TYPE_BUY,mt.POSITION_TYPE_SELL):raise ValueError('Unsupported position type.')
+        snapshot={k:getattr(position,k) for k in ('symbol','type','volume','price_open','sl','tp')}
+        if 'expected' in body and body['expected']!=snapshot:raise ValueError('Position changed since review. Review its current levels again.')
+        body['expected']=snapshot
+        if not mt.symbol_select(position.symbol,True):raise ValueError('Cannot load the position symbol.')
+        info,tick=mt.symbol_info(position.symbol),mt.symbol_info_tick(position.symbol)
+        if info is None or tick is None:raise ValueError('Cannot read the position quote.')
+        if time.time()-tick.time>30 or tick.time>time.time()+5 or not (0<tick.bid<=tick.ask):raise ValueError('Quote is stale or invalid. Wait for a fresh quote.')
+        sl,tp=[float(body.get(k) or 0) for k in ('sl','tp')]
+        if not all(math.isfinite(v) and v>=0 for v in (sl,tp)):raise ValueError('Enter finite, positive SL/TP prices, or zero to remove.')
+        for value in (sl,tp):
+            if value and abs(value/info.trade_tick_size-round(value/info.trade_tick_size))>1e-6:raise ValueError('SL/TP must align with the symbol price tick size.')
+        buy=position.type==mt.POSITION_TYPE_BUY
+        reference=tick.bid if buy else tick.ask
+        distance=info.trade_stops_level*info.point
+        if (buy and ((sl and sl>=reference-distance) or (tp and tp<=reference+distance))) or (not buy and ((sl and sl<=reference+distance) or (tp and tp>=reference-distance))):
+            raise ValueError('SL/TP must be on the correct side of the current closing quote, respecting broker stop distance.')
+        request=dict(action=mt.TRADE_ACTION_SLTP,position=position.ticket,symbol=position.symbol,sl=sl,tp=tp)
+        checked=mt.order_check(request)
+        if checked is None or checked.retcode!=0:raise ValueError('Broker protection check failed: '+(checked.comment if checked else str(mt.last_error())))
+        return request,account
+
+    def position_preview(self, body):
+        return self.preview(dict(operation='position-sltp',position=str(body.get('position','')),sl=body.get('sl',0),tp=body.get('tp',0)))
 
     def close_request(self, body):
         mt,account=self.connection(trading=True)
@@ -275,7 +310,7 @@ class Terminal:
                 if positions is not None:remaining=sum(p.volume for p in positions if p.ticket==request['position'])
             except Exception:
                 pass # A failed refresh must never conceal a completed send.
-        operation='close' if closing else 'modify' if preview['body'].get('operation')=='modify' else 'cancel' if preview['body'].get('operation')=='cancel' else 'pending' if preview['body'].get('order_kind','MARKET')!='MARKET' else 'open'
+        operation=preview['body'].get('operation') or ('pending' if preview['body'].get('order_kind','MARKET')!='MARKET' else 'open')
         return dict(retcode=result.retcode, comment=result.comment, order=str(result.order), deal=str(result.deal),
                     operation=operation,remaining_volume=remaining,
                     price=result.price, volume=result.volume,

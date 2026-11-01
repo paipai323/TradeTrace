@@ -13,7 +13,7 @@ saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
 
-## Market workspace (v1.15.0)
+## Market workspace (v1.16.0)
 
 The app automatically connects to the signed-in, running MT5 terminal on startup,
 using its last successful executable path when available, then loads broker
@@ -130,6 +130,13 @@ Live accounts support analysis; execution remains restricted to demo accounts.
   and invalidate any old preview; broker changes still require review and confirm.
   Drawing selection takes priority over a coincident trade line; use its explicit
   ticket-label grip to drag the trade level in that case.
+- The entry-label **×** dismisses the entire draft (including its SL/TP) without
+  sending any broker action. It stays dismissed through quote refreshes and page
+  reloads until you explicitly use the ticket again. In amendment mode, that ×
+  discards only the staged amendment and leaves the broker order untouched.
+  Actual positions and pending orders have separate ticket-number labels with
+  **×** controls on the chart: these open the normal reviewed close/cancel flow.
+  Off-screen broker entries are marked with an arrow at the chart edge.
 - On an existing pending order, use **Edit** or drag its entry/SL/TP line to stage
   an amendment. The ticket locks side and volume and requires **Review pending
   amendment**, then explicit confirmation. The backend preserves the ticket,
@@ -257,3 +264,5 @@ node --check static/connection.js
 ```
 
 References: [native deal properties](https://www.mql5.com/en/docs/constants/tradingconstants/dealproperties), [Python deal history](https://www.mql5.com/en/docs/python_metatrader5/mt5historydealsget_py), [historical ticks](https://www.mql5.com/en/docs/python_metatrader5/mt5copyticksrange_py).
+
+Open positions support **Edit SL / TP** in the positions table or by clicking their chart label. Drag or type protection levels, or use × to remove a level, then review and confirm. Filled entry and volume remain fixed. Amendments are demo-only, rechecked against the current quote and broker rules, and rejected if the position changes after review.
