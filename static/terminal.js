@@ -712,22 +712,22 @@
     conditionRun=null;conditionFinished=message;conditionLastResult=message;if(run?.applied)conditionApplied=run.applied;conditionMessage(message);saveConditions();renderSetupResult();
   }
   function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
-  function saveConditions(){try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
+  function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
   function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
     const row=text('div','','terminal-condition-row');row.dataset.visible=String(value.visible!==false);row.dataset.conditionId=typeof value.id==='string'&&value.id&&!([...el('condition-list').children].some(item=>item.dataset.conditionId===value.id))?value.id:crypto.randomUUID();
-    const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);const badge=text('span','Draft','terminal-condition-progress');badge.dataset.progress='draft';badge.setAttribute('aria-label','Condition progress');header.append(summary,badge);row.append(header,editor);
-    row.onfocusin=event=>{if(!event.target.closest('.terminal-condition-summary'))selectCondition(row);};row.onclick=event=>{if(row.isConnected&&!event.target.closest('.terminal-condition-summary'))selectCondition(row);};
+    const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);const badge=text('span','Draft','terminal-condition-progress');badge.dataset.progress='draft';badge.setAttribute('aria-label','Condition progress');const duplicate=text('button','⧉','terminal-condition-duplicate');duplicate.type='button';duplicate.title='Duplicate condition';duplicate.setAttribute('aria-label','Duplicate condition');duplicate.onclick=event=>{event.stopPropagation();duplicateCondition(row);};header.append(summary,badge,duplicate);row.append(header,editor);
+    row.onfocusin=event=>{if(event.target.matches('[data-field]'))conditionHistoryGroup={label:'Edit '+event.target.getAttribute('aria-label'),recorded:false};if(!event.target.closest('.terminal-condition-summary'))selectCondition(row);};row.onfocusout=event=>{if(event.target.matches('[data-field]'))conditionHistoryGroup=null;};row.onclick=event=>{if(row.isConnected&&!event.target.closest('.terminal-condition-summary'))selectCondition(row);};
     const visibility=text('label','Show on chart'),check=document.createElement('input');check.type='checkbox';check.checked=value.visible!==false;check.setAttribute('aria-label','Show condition on chart');check.onchange=()=>{row.dataset.visible=String(check.checked);saveConditions();};visibility.prepend(check);header.append(visibility);
     const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);if(!options){const pick=text('button','Pick on chart');pick.type='button';pick.onclick=()=>{setTool('cursor');selectCondition(row);conditionPick={row,field:name};el('tool-hint').textContent='Click the chart to set condition '+name+' · Escape cancels';};label.append(pick);}editor.append(label);return input;};
     const rule=add('Rule','rule',Object.entries(C.rules)),mode=add('Evaluate','mode',[['LIVE','Live Bid'],['CANDLE','Completed candle']]),tf=add('Timeframe','timeframe',C.frames.map(f=>[f,f]));
     const level=add('Price level','level'),low=add('Zone low','low'),high=add('Zone high','high');
     const update=()=>{conditionPick=null;if(C.candleOnly(rule.value))mode.value='CANDLE';mode.disabled=C.candleOnly(rule.value);tf.parentNode.hidden=mode.value==='LIVE';level.parentNode.hidden=C.zone(rule.value);low.parentNode.hidden=high.parentNode.hidden=!C.zone(rule.value);saveConditions();};
-    row.onchange=event=>{if(event.target===rule){if(C.zone(rule.value))seedConditionZone(row);else seedConditionLevel(row);}update();};row.oninput=()=>{saveConditions();};
-    for(const [label,action] of [['↑',()=>{if(row.previousElementSibling)row.before(row.previousElementSibling);}],['↓',()=>{if(row.nextElementSibling)row.after(row.nextElementSibling);}],['Remove',()=>row.remove()]]){const button=text('button',label);button.type='button';button.setAttribute('aria-label',label==='↑'?'Move condition up':label==='↓'?'Move condition down':'Remove condition');button.onclick=()=>{action();saveConditions();};editor.append(button);}
+    row.onchange=event=>{const apply=()=>{if(event.target===rule){if(C.zone(rule.value))seedConditionZone(row);else seedConditionLevel(row);}update();};if(event.target.matches('select[data-field]'))conditionHistoryTransaction('Edit '+event.target.getAttribute('aria-label'),apply);else apply();};row.oninput=event=>{if(event.target.tagName!=='SELECT')saveConditions();};
+    for(const [label,action] of [['↑',()=>{if(row.previousElementSibling)row.previousElementSibling.before(row);}],['↓',()=>{if(row.nextElementSibling)row.nextElementSibling.after(row);}],['Remove',()=>row.remove()]]){const button=text('button',label);button.type='button';button.setAttribute('aria-label',label==='↑'?'Move condition up':label==='↓'?'Move condition down':'Remove condition');button.onclick=event=>{event.stopPropagation();conditionHistoryTransaction(label==='Remove'?'Remove condition':label==='↑'?'Move condition up':'Move condition down',action);};editor.append(button);}
     el('condition-list').append(row);selectCondition(row);update();return row;
   }
   function restoreConditions(){
-    const key=conditionStorage();if(conditionDraftScope===key)return;conditionDraftScope=key;
+    const key=conditionStorage();if(conditionDraftScope===key)return;conditionHistorySuspended=true;conditionDraftScope=key;
     let value={};try{value=JSON.parse(localStorage.getItem(key)||'{}');}catch(_){}
     restoreConditionEvents();
     const applied=value.applied;conditionApplied=applied?.state==='finished'&&Array.isArray(applied.rows)&&applied.index===applied.rows.length?applied:null;
@@ -739,10 +739,10 @@
     el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';
     for(const name of ['timeout','gap'])el('condition-'+name).value=Number.isFinite(Number(value[name]))&&Number(value[name])>=0?value[name]:(name==='gap'?300:0);
     if(Array.isArray(value.rows))for(const row of value.rows)if(row&&typeof row==='object')conditionRow(row);
-    renderConditionValidation();if(conditionEvents.length)logConditionEvent('Restored','Saved draft restored. Monitoring was not resumed.');
+    resetConditionUndo();renderConditionValidation();if(conditionEvents.length)logConditionEvent('Restored','Saved draft restored. Monitoring was not resumed.');
   }
   for(const id of ['condition-show-levels','condition-show-zones'])el(id).onchange=()=>{finishConditionDrag(true);conditionPick=null;saveConditions();};
-  el('condition-add').onclick=()=>{restoreConditions();const row=conditionRow();seedConditionLevel(row);saveConditions();};
+  el('condition-add').onclick=()=>{restoreConditions();conditionHistoryTransaction('Add condition',()=>{const row=conditionRow();seedConditionLevel(row);});};
   for(const name of ['sizing','timeout','gap'])el('condition-'+name).addEventListener('change',saveConditions);
   for(const name of ['timeout','gap'])el('condition-'+name).addEventListener('input',renderConditionValidation);
   el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;invalidate();syncDraftLines();});
@@ -1060,6 +1060,60 @@
     if(summary.textContent!==message)summary.textContent=message;
     el('condition-start').disabled=!conditionDraftValid||conditionBusy||submitting||reviewing||closing;
   }
+
+  let conditionUndoStack=[],conditionHistoryBaseline=null,conditionHistoryGroup=null,conditionHistorySuspended=false;
+  const conditionDraftSnapshot=()=>({rows:structuredClone(conditionRows()),selectedId:selectedConditionRow?.dataset.conditionId||null});
+  function renderConditionUndo(){
+    const button=el('condition-undo');button.disabled=!conditionUndoStack.length;
+    button.title=conditionUndoStack.length?`Undo: ${conditionUndoStack.at(-1).label}. Draft only; running setup is unchanged.`:'No condition draft changes to undo.';
+  }
+  function resetConditionUndo(){
+    conditionUndoStack=[];conditionHistoryGroup=null;conditionHistoryBaseline=conditionDraftSnapshot();conditionHistorySuspended=false;renderConditionUndo();
+  }
+  function recordConditionUndo(){
+    if(conditionHistorySuspended)return;
+    const current=conditionDraftSnapshot();
+    if(conditionHistoryBaseline&&JSON.stringify(current.rows)!==JSON.stringify(conditionHistoryBaseline.rows)){
+      if(!conditionHistoryGroup?.recorded){
+        const selectedId=conditionHistoryBaseline.rows.some(row=>row.id===current.selectedId)?current.selectedId:conditionHistoryBaseline.selectedId;
+        conditionUndoStack.push({...structuredClone(conditionHistoryBaseline),selectedId,label:conditionHistoryGroup?.label||'Edit conditions'});
+        if(conditionUndoStack.length>30)conditionUndoStack.shift();
+        if(conditionHistoryGroup)conditionHistoryGroup.recorded=true;
+      }
+    }
+    conditionHistoryBaseline=current;renderConditionUndo();
+  }
+  function conditionHistoryTransaction(label,action){
+    const previous=conditionHistoryGroup;conditionHistoryGroup={label,recorded:false};
+    try{action();saveConditions();}finally{conditionHistoryGroup=previous;}
+  }
+  function duplicateCondition(row){
+    const original=conditionRows().find(item=>item.id===row.dataset.conditionId);if(!original)return;
+    conditionHistoryTransaction('Duplicate condition',()=>{
+      const copy=conditionRow({...structuredClone(original),id:crypto.randomUUID()});row.after(copy);selectCondition(copy);
+    });
+    logConditionEvent('Duplicated','Condition copied into an independent draft row. Monitoring was not changed.');
+  }
+  function undoConditionEdit(){
+    if(conditionDrag){finishConditionDrag(true);return;}
+    if(!conditionUndoStack.length)return;
+    conditionPick=null;conditionHistoryGroup=null;
+    const previous=conditionUndoStack.pop();conditionHistorySuspended=true;
+    try{
+      selectedConditionRow=null;el('condition-list').replaceChildren();
+      for(const row of previous.rows)conditionRow(row);
+      selectCondition([...el('condition-list').children].find(row=>row.dataset.conditionId===previous.selectedId)||el('condition-list').firstElementChild||null);
+      saveConditions();
+    }finally{conditionHistorySuspended=false;conditionHistoryBaseline=conditionDraftSnapshot();renderConditionUndo();}
+    logConditionEvent('Draft undo',`${previous.label} undone. Running setup and broker orders were not changed.`);
+  }
+  el('condition-undo').onclick=undoConditionEdit;
+  el('pane').addEventListener('keydown',event=>{
+    if(!(event.ctrlKey||event.metaKey)||event.shiftKey||event.key.toLowerCase()!=='z'||event.target.closest('input,textarea,select,[contenteditable="true"]'))return;
+    const conditionContext=el('conditions-panel').contains(event.target)||(event.target===el('chart')&&selectedDrawing<0&&selectedConditionRow);
+    if(conditionContext&&(conditionUndoStack.length||conditionDrag)){event.preventDefault();undoConditionEdit();}
+  });
+  renderConditionUndo();
 
   selectSetupTab('order');
 
