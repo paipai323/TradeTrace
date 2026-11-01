@@ -10,11 +10,27 @@ class ConditionEntryTests(unittest.TestCase):
         self.account.equity=10000
         self.body.update(condition_entry=True,expected_account='123',expected_server='Demo')
 
-    def test_condition_rechecks_exposure_at_send(self):
+    def test_condition_allows_existing_positions_and_pending_orders(self):
+        self.mt.positions_get.return_value=[Row(symbol='EURUSD')]
+        self.mt.orders_get.return_value=[Row(symbol='EURUSD')]
+        self.terminal.submit(self.terminal.preview(self.body))
+        self.mt.order_send.assert_called_once()
+        self.assertNotIn('position',self.mt.order_send.call_args.args[0])
+
+    def test_condition_allows_pending_entry_with_existing_exposure(self):
+        self.mt.positions_get.return_value=[Row(symbol='EURUSD')]
+        self.mt.orders_get.return_value=[Row(symbol='EURUSD')]
+        self.body.update(order_kind='LIMIT',price=1.095)
+        self.terminal.submit(self.terminal.preview(self.body))
+        self.mt.order_send.assert_called_once()
+        self.assertEqual(self.mt.order_send.call_args.args[0]['action'],self.mt.TRADE_ACTION_PENDING)
+
+    def test_condition_allows_exposure_arriving_after_preview(self):
         preview=self.terminal.preview(self.body)
         self.mt.positions_get.return_value=[Row(symbol='EURUSD')]
-        with self.assertRaisesRegex(ValueError,'Existing position'):self.terminal.submit(preview)
-        self.mt.order_send.assert_not_called()
+        self.mt.orders_get.return_value=[Row(symbol='EURUSD')]
+        self.terminal.submit(preview)
+        self.mt.order_send.assert_called_once()
 
     def test_condition_cooldown_blocks_second_arm(self):
         self.terminal.submit(self.terminal.preview(self.body))

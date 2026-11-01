@@ -34,7 +34,7 @@
   }
   class Sequence{
     constructor(rows,{timeout=0,gap=300}={}){this.rows=structuredClone(validate(rows));this.timeout=timeout;this.gap=gap;this.reset();this.done=!rows.length;}
-    reset(){this.index=0;this.memory={};this.previous=null;this.lastTime=null;this.started=null;this.candle=null;this.done=false;}
+    reset(){if(this.done)return;this.index=0;this.memory={};this.previous=null;this.lastTime=null;this.started=null;this.candle=null;this.done=false;}
     observe({bid,time,candles=[]}){
       if(this.done||!Number.isFinite(bid)||bid<=0||!Number.isFinite(time))return false;
       if(this.lastTime!==null&&time<=this.lastTime)return false;

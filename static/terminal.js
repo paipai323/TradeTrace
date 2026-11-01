@@ -686,12 +686,19 @@
   el('chart').addEventListener('pointerup',event=>{if(orderDrag){event.preventDefault();event.stopImmediatePropagation();finishOrderDrag();return;}if(!drawingDrag)return;event.preventDefault();event.stopImmediatePropagation();finishDrawingDrag();},true);
   el('chart').addEventListener('pointercancel',()=>{finishOrderDrag(true);finishDrawingDrag(true);},true);
   const C=window.TerminalConditions;
-  let conditionRun=null,conditionBusy=false,conditionDraftScope='';
+  let conditionRun=null,conditionBusy=false,conditionDraftScope='',conditionFinished='';
   const conditionMessage=message=>{el('condition-status').textContent=message;};
   const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
-  function stopConditions(message){conditionRun=null;if(el('condition-status'))conditionMessage(message);}
+  function stopConditions(message){conditionRun=null;if(el('condition-status'))conditionMessage(conditionFinished||message);}
+  function finishConditions(message,run){
+    if(run&&(run.scope!==scope||run.symbol!==el('symbol').value)){
+      try{const key=`tradetrace.conditions.v1:${run.scope}:${run.symbol}`,draft=JSON.parse(localStorage.getItem(key)||'{}');localStorage.setItem(key,JSON.stringify({...draft,finished:message}));}catch(_){}
+      return;
+    }
+    conditionRun=null;conditionFinished=message;conditionMessage(message);saveConditions();
+  }
   function conditionRows(){return [...el('condition-list').children].map(row=>Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high'].includes(input.dataset.field)?Number(input.value):input.value])));}
-  function saveConditions(){try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value}));}catch(_){conditionMessage('Cannot save condition draft locally.');}}
+  function saveConditions(){try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished}));}catch(_){conditionMessage('Cannot save condition draft locally.');}}
   function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
     const row=text('div','','terminal-condition-row');
     const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);row.append(label);return input;};
@@ -703,8 +710,9 @@
     el('condition-list').append(row);update();return row;
   }
   function restoreConditions(){
-    const key=conditionStorage();if(conditionDraftScope===key)return;conditionDraftScope=key;stopConditions('Stopped. Review the restored draft and start when ready.');
+    const key=conditionStorage();if(conditionDraftScope===key)return;conditionDraftScope=key;
     let value={};try{value=JSON.parse(localStorage.getItem(key)||'{}');}catch(_){}
+    conditionFinished=typeof value.finished==='string'?value.finished:'';stopConditions('Stopped. Review the restored draft and start when ready.');
     el('condition-list').replaceChildren();el('condition-action').value='ALERT';
     el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';
     for(const name of ['timeout','gap'])el('condition-'+name).value=Number.isFinite(Number(value[name]))&&Number(value[name])>=0?value[name]:(name==='gap'?300:0);
@@ -720,7 +728,7 @@
   async function conditionComplete(run){
     if(!conditionContextValid(run)||run.attempted)return;run.attempted=true;
     conditionMessage('All conditions passed.');
-    if(run.action==='ALERT'){conditionRun=null;return;}
+    if(run.action==='ALERT'){finishConditions('All conditions passed. Finished — click Start conditions to start again.',run);return;}
     conditionBusy=true;
     try{
       if(submitting||reviewing||closing||editingOrder||editingPosition)throw Error('Ticket is busy. No entry attempted.');
@@ -746,13 +754,13 @@
         invalidate();preview=result.preview;
         el('order-summary').textContent=`CONDITIONS COMPLETE · DEMO ${result.account} / ${result.server} · ${body.side} ${result.order_kind} · ${result.request.volume} lots ${body.symbol} at ${result.request.price} · SL ${result.request.sl} · TP ${result.request.tp}. Frozen settings from Start; confirm below.`;
         el('submit').hidden=false;expiryTimer=setTimeout(()=>{if(preview===result.preview){invalidate(false);el('order-summary').append(text('p','Condition review expired. Start again.'));}},result.expires_in*1000);
-        conditionRun=null;conditionMessage('Finished. Confirm the prepared order in the ticket.');return;
+        finishConditions('Finished. Confirm the prepared order in the ticket. Start conditions is required for another setup.',run);return;
       }
       // Consume this arm before the only send. Unknown outcomes are never retried.
       conditionRun=null;submitting=true;invalidate();updateTicket();
       const sent=await call('terminal/submit',{preview:result.preview});
-      conditionMessage(`Finished · broker ${sent.retcode}: ${sent.comment}. Order ${sent.order}, deal ${sent.deal}. Check MT5 for final status.`);
-    }catch(error){conditionRun=null;conditionMessage(`Stopped: ${error.message} No automatic retry. Check MT5 before rearming.`);}
+      finishConditions(`Finished · broker ${sent.retcode}: ${sent.comment}. Order ${sent.order}, deal ${sent.deal}. Check MT5 for final status. Start conditions is required for another setup.`,run);
+    }catch(error){finishConditions(`Finished: ${error.message} No automatic retry. Check MT5 before explicitly starting another setup.`,run);}
     finally{conditionBusy=false;submitting=false;updateTicket();}
   }
   el('condition-start').onclick=async()=>{
@@ -765,7 +773,7 @@
       if(action!=='ALERT'&&(!market.demo||editingOrder||editingPosition))throw Error('Use a new demo order ticket for condition entries.');
       const ticket={symbol:el('symbol').value,side:el('side').value,order_kind:el('order-kind').value,price:el('order-price').value,volume:el('volume').value,sl:el('sl').value,tp:el('tp').value};
       if(action!=='ALERT'&&(!(Number(ticket.sl)>0)||!(Number(ticket.tp)>0)))throw Error('Enter SL and TP in the order ticket first.');
-      stopConditions('');saveConditions();invalidate();
+      conditionFinished='';stopConditions('');saveConditions();invalidate();
       conditionRun={scope,symbol:ticket.symbol,action,ticket,sizing:el('condition-sizing').value,sequence:new C.Sequence(rows,{timeout,gap}),attempted:false};
       conditionMessage(`${action==='AUTO'?'DEMO ORDER ARMED':action==='REVIEW'?'Review preparation running':'Alerts running'} · step ${rows.length?1:0} of ${rows.length}. Draft edits require Start again.`);
       if(!rows.length)await conditionComplete(conditionRun);

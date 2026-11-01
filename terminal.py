@@ -212,11 +212,6 @@ class Terminal:
                 raise ValueError('Condition account changed. Start again.')
             if not sl or not tp:
                 raise ValueError('Condition entries require SL and TP.')
-            positions, orders = mt.positions_get(symbol=symbol), mt.orders_get(symbol=symbol)
-            if positions is None or orders is None:
-                raise ValueError('Cannot verify symbol exposure.')
-            if positions or orders:
-                raise ValueError('Existing position or pending order blocks condition entry.')
             if body.get('condition_risk_auto'):
                 adverse = price + (1 if side == 'BUY' else -1) * 20 * info.point
                 loss = mt.order_calc_profit(mt.ORDER_TYPE_BUY if side == 'BUY' else mt.ORDER_TYPE_SELL, symbol, volume, adverse, sl)
