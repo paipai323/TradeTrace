@@ -105,6 +105,7 @@
   function updateTicket(){
     el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;
     el('condition-start').disabled=!conditionDraftValid||conditionBusy||submitting||reviewing||closing;
+    renderConditionComparison();
     el('condition-stop').disabled=!conditionRun&&!conditionBusy;
     const fresh=market&&Date.now()/1000-market.quote_time<=30&&market.quote_time<=Date.now()/1000+5;
     el('preview').disabled=!market?.demo||!fresh||submitting||reviewing||closing||(autoDraftSizing()&&(!ticketEstimate?.auto_volume||ticketEstimate.key!==ticketEstimateKey||!!ticketEstimateError));
@@ -746,7 +747,7 @@
   for(const name of ['sizing','timeout','gap'])el('condition-'+name).addEventListener('change',saveConditions);
   for(const name of ['timeout','gap'])el('condition-'+name).addEventListener('input',renderConditionValidation);
   el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;invalidate();syncDraftLines();});
-  el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic demo entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';if(conditionRun)stopConditions('Stopped: entry mode changed. Start to apply your draft.');};
+  el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic demo entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';if(conditionRun)stopConditions('Stopped: entry mode changed. Start to apply your draft.');renderConditionComparison();};
   el('conditions-panel').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT')event.preventDefault();});
   el('condition-stop').onclick=()=>stopConditions('Stopped. No future condition order will be sent. Check MT5 for any request already submitted.');
   const conditionContextValid=run=>conditionRun===run&&run.scope===scope&&run.symbol===el('symbol').value&&!document.hidden&&!el('pane').hidden;
@@ -801,7 +802,7 @@
       if(action!=='ALERT'&&(!market.demo||editingOrder||editingPosition))throw Error('Use a new demo order ticket for condition entries.');
       const ticket={symbol:el('symbol').value,side:el('side').value,order_kind:el('order-kind').value,price:el('order-price').value,volume:el('volume').value,sl:el('sl').value,tp:el('tp').value};
       if(action!=='ALERT'&&(!(Number(ticket.sl)>0)||!(Number(ticket.tp)>0)))throw Error('Enter SL and TP in the order ticket first.');
-      conditionFinished='';stopConditions('');conditionApplied={rows:structuredClone(rows),index:0,state:'running'};saveConditions();invalidate();
+      conditionFinished='';stopConditions('');conditionApplied={rows:structuredClone(rows),index:0,state:'running',settings:conditionComparisonSettings()};saveConditions();invalidate();
       conditionRun={scope,symbol:ticket.symbol,action,ticket,sizing:el('condition-sizing').value,sequence:new C.Sequence(rows,{timeout,gap}),applied:conditionApplied,attempted:false};
       logConditionEvent('Started',`${rows.length} condition${rows.length===1?'':'s'} · ${action==='AUTO'?'automatic demo entry':action==='REVIEW'?'prepare for review':'alerts only'}. Starting at step 1.`,conditionRun);
       conditionMessage(`${action==='AUTO'?'DEMO ORDER ARMED':action==='REVIEW'?'Review preparation running':'Alerts running'} · step ${rows.length?1:0} of ${rows.length}. Draft edits require Start again.`);
@@ -998,6 +999,7 @@
       }
       if(badge.textContent!==label)badge.textContent=label;badge.dataset.progress=kind;badge.title=hint;
     }
+    renderConditionComparison();
   }
   el('drawing-condition').onclick=()=>{
     const drawing=currentDrawings()[selectedDrawing];if(!drawing||!['level','rectangle'].includes(drawing.type))return;
@@ -1058,7 +1060,7 @@
     const summary=el('condition-validation-summary');summary.hidden=conditionDraftValid;
     const message=invalid?`${invalid} condition${invalid===1?' needs':'s need'} attention. Open Conditions to fix the highlighted fields.`:'Check the timing and reset settings.';
     if(summary.textContent!==message)summary.textContent=message;
-    el('condition-start').disabled=!conditionDraftValid||conditionBusy||submitting||reviewing||closing;
+    el('condition-start').disabled=!conditionDraftValid||conditionBusy||submitting||reviewing||closing;renderConditionComparison();
   }
 
   let conditionUndoStack=[],conditionHistoryBaseline=null,conditionHistoryGroup=null,conditionHistorySuspended=false;
@@ -1114,6 +1116,59 @@
     if(conditionContext&&(conditionUndoStack.length||conditionDrag)){event.preventDefault();undoConditionEdit();}
   });
   renderConditionUndo();
+
+  let conditionComparisonKey='';
+  function conditionComparisonSettings(){
+    return {action:el('condition-action').value,sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value,ticket:Object.fromEntries(['side','order-kind','order-price','volume','sl','tp'].map(name=>[name,el(name).value]))};
+  }
+  function comparisonPrice(value){const n=Number(value);return Number.isFinite(n)&&n>0?n.toLocaleString('en-US',{maximumFractionDigits:8}):'Not set';}
+  function comparisonSettings(settings){
+    if(!settings)return null;const ticket=settings.ticket||{};
+    const timing=(value,unit)=>value===''||!Number.isFinite(Number(value))||Number(value)<0?'Invalid':Number(value)===0?'Off':`${Number(value)} ${unit}`;
+    return {action:{ALERT:'Alerts only',REVIEW:'Prepare for review',AUTO:'Automatic demo entry'}[settings.action]||'Not set',sizing:settings.sizing==='AUTO'?'2% equity':'Manual lots',side:ticket.side||'Not set',kind:ticket['order-kind']==='PENDING'?'Pending':'Market',entry:ticket['order-kind']==='PENDING'?comparisonPrice(ticket['order-price']):'Market quote',volume:settings.sizing==='AUTO'?'Auto (2% equity)':comparisonPrice(ticket.volume),sl:comparisonPrice(ticket.sl),tp:comparisonPrice(ticket.tp),timeout:timing(settings.timeout,'min'),gap:timing(settings.gap,'s')};
+  }
+  function comparisonCondition(row){
+    if(!row)return '—';const price=C.zone(row.rule)?`${comparisonPrice(row.low)} – ${comparisonPrice(row.high)}`:comparisonPrice(row.level);
+    return `${C.rules[row.rule]||'Choose rule'} · ${price} · ${row.mode==='LIVE'?'Live Bid':row.timeframe+' candle'}`;
+  }
+  function renderConditionComparison(){
+    const applied=conditionApplied,draft=conditionRows(),currentSettings=comparisonSettings(conditionComparisonSettings()),appliedSettings=comparisonSettings(applied?.settings);
+    const key=JSON.stringify([applied,draft.map(({visible,...row})=>row),currentSettings]);if(key===conditionComparisonKey)return;conditionComparisonKey=key;
+    const pairs=[];let changes=0;
+    for(const [index,row] of (applied?.rows||[]).entries()){
+      const draftIndex=draft.findIndex(item=>item.id===row.id),current=draft[draftIndex];
+      const edited=current&&conditionSignature(row)!==conditionSignature(current),moved=current&&draftIndex!==index;
+      const change=!current?'removed':edited?'changed':moved?'moved':'unchanged';if(change!=='unchanged')changes++;
+      pairs.push({row,current,index,draftIndex,change,moved});
+    }
+    for(const [draftIndex,current] of draft.entries())if(!(applied?.rows||[]).some(row=>row.id===current.id)){pairs.push({row:null,current,index:-1,draftIndex,change:applied?'added':'draft',moved:false});if(applied)changes++;}
+    const settings=Object.entries(currentSettings).map(([field,value])=>({field,value,previous:appliedSettings?.[field],changed:!!appliedSettings&&appliedSettings[field]!==value}));
+    const settingsChanges=settings.filter(item=>item.changed).length,total=changes+settingsChanges;
+    el('condition-comparison-count').textContent=!applied?'No applied setup':total?`${total} unapplied change${total===1?'':'s'}`:'Draft matches applied';
+    const state=applied?.state;
+    el('condition-comparison-status').textContent=!applied?'No applied setup yet. Start conditions to capture the rules and settings.':state==='running'?`Applied setup is running at step ${Math.min(applied.index+1,applied.rows.length)} of ${applied.rows.length}.`:`Applied setup is ${state==='finished'?'finished':'stopped'}. No monitoring is active.`;
+    const fragment=document.createDocumentFragment();
+    for(const pair of pairs){
+      const card=text('section','','terminal-condition-comparison-card');card.dataset.comparisonChange=pair.change;
+      const heading=pair.change==='draft'?'Draft only':pair.change==='unchanged'?'Unchanged':pair.change==='removed'?'Removed from draft':pair.change==='added'?'Added to draft':pair.change==='moved'?'Reordered':pair.moved?'Changed and reordered':'Changed';
+      card.append(text('strong',heading));const columns=text('div','','terminal-condition-comparison-columns');
+      for(const side of ['applied','draft']){
+        const cell=text('div');cell.dataset.comparisonSide=side;
+        const original=side==='applied',row=original?pair.row:pair.current,index=original?pair.index:pair.draftIndex;
+        let progress='';if(original&&row)progress=index<applied.index?' · Passed':state==='running'&&index===applied.index?' · Watching':state==='running'?' · Waiting':' · Stopped';
+        cell.append(text('small',`${original?'Applied':'Draft'}${row?' #'+(index+1):''}${progress}`),text('p',comparisonCondition(row)));columns.append(cell);
+      }
+      card.append(columns);fragment.append(card);
+    }
+    if(!pairs.length)fragment.append(text('p','No conditions in this setup.','terminal-muted'));
+    el('condition-comparison-rows').replaceChildren(fragment);
+    const table=el('condition-comparison-settings');table.replaceChildren();
+    if(applied&&!appliedSettings){el('condition-comparison-settings-note').textContent='This older setup has no saved order/timing snapshot. Start a new run to capture one.';return;}
+    el('condition-comparison-settings-note').textContent='Order and timing settings from Start. Order fields are inactive in alerts-only mode.';
+    const head=document.createElement('thead'),header=document.createElement('tr');for(const name of ['Setting','Applied','Draft'])header.append(text('th',name));head.append(header);table.append(head);
+    const body=document.createElement('tbody'),labels={action:'Action',sizing:'Sizing',side:'Side',kind:'Order',entry:'Entry',volume:'Lots',sl:'Stop loss',tp:'Take profit',timeout:'Timeout',gap:'Quote gap'};
+    for(const item of settings){const row=document.createElement('tr');row.dataset.setting=item.field;row.dataset.changed=String(item.changed);row.append(text('th',labels[item.field]),text('td',item.previous??'—'),text('td',item.value));body.append(row);}table.append(body);
+  }
 
   selectSetupTab('order');
 
