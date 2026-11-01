@@ -34,6 +34,25 @@ class TerminalTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.terminal.submit(p)
         self.mt.order_send.assert_called_once()
 
+    def test_draft_estimates_signed_optional_levels_without_trading(self):
+        for side in ('BUY','SELL'):
+            self.mt.order_calc_profit.side_effect=[-12.5,25]
+            result=self.terminal.estimate(dict(symbol='EURUSD',side=side,volume=.01,entry=1.1,sl=1.09,tp=1.12))
+            self.assertEqual((result['sl'],result['tp'],result['currency']),(-12.5,25,'USD'))
+            self.assertEqual(self.mt.order_calc_profit.call_args.args,(0 if side=='BUY' else 1,'EURUSD',.01,1.1,1.12))
+        self.mt.order_calc_profit.side_effect=None;self.mt.order_calc_profit.return_value=7.5
+        result=self.terminal.estimate(dict(symbol='EURUSD',side='BUY',volume=.01,entry=1.1,sl=1.105))
+        self.assertEqual((result['sl'],result['tp']),(7.5,None))
+        self.mt.order_send.assert_not_called();self.mt.order_check.assert_not_called()
+
+    def test_draft_estimates_reject_invalid_or_unavailable_values(self):
+        body=dict(symbol='EURUSD',side='BUY',volume=.01,entry=1.1,sl=1.09)
+        for change in [dict(entry=0),dict(volume=.015),dict(tp=-1),dict(sl=float('nan')),dict(side='invalid')]:
+            with self.subTest(change=change),self.assertRaises(ValueError):self.terminal.estimate({**body,**change})
+        self.mt.order_calc_profit.return_value=None
+        with self.assertRaisesRegex(ValueError,'unavailable'):self.terminal.estimate(body)
+        self.mt.order_send.assert_not_called()
+
     def position_fixture(self, side=0):
         self.mt.TRADE_ACTION_SLTP=6
         position=Row(ticket=42,symbol='EURUSD',volume=.1,type=side,price_open=1.09 if side==0 else 1.12,sl=0,tp=0)

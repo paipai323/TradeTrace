@@ -117,6 +117,25 @@ class Terminal:
                     mark_to_market=mark if mark is not None and math.isfinite(mark) else None,quote_time=tick.time,
                     note='Hypothetical gross estimate; excludes commission, swap and slippage. This is not an open position.')
 
+    def estimate(self, body):
+        """Read-only signed P/L for each optional draft protection level."""
+        mt,account=self.connection()
+        symbol,side=str(body.get('symbol','')),body.get('side')
+        info=mt.symbol_info(symbol)
+        if info is None or side not in ('BUY','SELL'):raise ValueError('Select a valid symbol and side.')
+        volume,entry,sl,tp=[float(body.get(k) or 0) for k in ('volume','entry','sl','tp')]
+        if not all(math.isfinite(v) for v in (volume,entry,sl,tp)) or volume<=0 or entry<=0 or min(sl,tp)<0:
+            raise ValueError('Enter positive entry and volume, with valid optional SL/TP prices.')
+        if not info.volume_min<=volume<=info.volume_max or abs(volume/info.volume_step-round(volume/info.volume_step))>1e-7:
+            raise ValueError('Volume must respect the broker lot limits and step.')
+        values={}
+        for field,price in (('sl',sl),('tp',tp)):
+            value=mt.order_calc_profit(mt.ORDER_TYPE_BUY if side=='BUY' else mt.ORDER_TYPE_SELL,symbol,volume,entry,price) if price else None
+            if price and (value is None or not math.isfinite(value)):raise ValueError('Broker profit estimate unavailable.')
+            values[field]=value
+        self.bridge.check()
+        return dict(account=str(account.login),server=account.server,currency=account.currency,**values)
+
     def request(self, body, position=None, pending_order=None):
         if body.get('operation') == 'position-sltp':
             return self.position_request(body)

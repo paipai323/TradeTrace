@@ -110,6 +110,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = terminal.market(body)
             elif self.path == '/api/terminal/plan':
                 result = terminal.plan(body)
+            elif self.path == '/api/terminal/estimate':
+                result = terminal.estimate(body)
             elif self.path == '/api/terminal/preview':
                 result = terminal.preview(body)
             elif self.path == '/api/terminal/close-preview':

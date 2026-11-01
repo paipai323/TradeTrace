@@ -276,3 +276,5 @@ node --check static/connection.js
 References: [native deal properties](https://www.mql5.com/en/docs/constants/tradingconstants/dealproperties), [Python deal history](https://www.mql5.com/en/docs/python_metatrader5/mt5historydealsget_py), [historical ticks](https://www.mql5.com/en/docs/python_metatrader5/mt5copyticksrange_py).
 
 Open positions support **Edit SL / TP** in the positions table or by clicking their chart label. Drag or type protection levels, or use × to remove a level, then review and confirm. Filled entry and volume remain fixed. Amendments are demo-only, rechecked against the current quote and broker rules, and rejected if the position changes after review.
+
+Draft SL/TP chart labels show estimated signed P/L in account currency using MT5 broker profit calculations. Amounts update after entry, side, volume or protection changes, including single-leg drafts and position amendments. Estimates exclude commission, swap and slippage; previous amounts remain marked while an update is pending. Estimating never sends an order.

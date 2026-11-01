@@ -13,7 +13,7 @@ let browser;
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Test server timeout')),15000);server.stdout.on('data',chunk=>{if(chunk.toString().includes('http://')){clearTimeout(timer);resolve();}});server.on('error',reject);server.stderr.on('data',chunk=>process.stderr.write(chunk));});
   const executablePath=['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','C:/Program Files/Microsoft/Edge/Application/msedge.exe'].find(p=>fs.existsSync(p));
   browser=await playwright.chromium.launch({headless:true,...(executablePath?{executablePath}:{}),args:['--disable-gpu']});
-  const page=await browser.newPage({viewport:{width:1536,height:1100}}),errors=[];let positionAmendments=0,positionLevels={sl:1.09,tp:1.12},proposedLevels=null,previews=0,submissions=0,planRequests=0,planDelay=0,positionClosed=false,pendingExists=false,pendingSnapshot=null,pendingModification=null,mockConnected=false,connectionCalls=0,lastConnectionPath=null;
+  const page=await browser.newPage({viewport:{width:1536,height:1100}}),errors=[];let draftEstimateDelay=0,draftEstimateCalls=0,positionAmendments=0,positionLevels={sl:1.09,tp:1.12},proposedLevels=null,previews=0,submissions=0,planRequests=0,planDelay=0,positionClosed=false,pendingExists=false,pendingSnapshot=null,pendingModification=null,mockConnected=false,connectionCalls=0,lastConnectionPath=null;
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/api/**',async route=>{
     const request=route.request(),endpoint=new URL(request.url()).pathname,body=request.postDataJSON()||{};
@@ -25,6 +25,7 @@ let browser;
     else if(endpoint==='/api/terminal/symbols')value={symbols:['EURUSD','GBPUSD','XAUUSD'],visible:['EURUSD','GBPUSD'],account:'123',server:'Test-Demo',currency:'USD',demo:true};
     else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:1.103,ask:1.1031,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo:true,orders:pendingExists?[pendingSnapshot]:[],positions:positionClosed?[]:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,...positionLevels,profit:20}]};
     else if(endpoint==='/api/terminal/quotes')value={account:'123',server:'Test-Demo',quotes:Object.fromEntries(body.symbols.map(s=>[s,{bid:1.103,ask:1.1031,time:Date.now()/1000}]))};
+    else if(endpoint==='/api/terminal/estimate'){draftEstimateCalls++;if(draftEstimateDelay)await new Promise(resolve=>setTimeout(resolve,draftEstimateDelay));const sign=body.side==='BUY'?1:-1,profit=price=>price?sign*(Number(price)-Number(body.entry))*Number(body.volume)*100000:null;value={account:'123',server:'Test-Demo',currency:'USD',sl:profit(Number(body.sl)),tp:profit(Number(body.tp))};}
     else if(endpoint==='/api/terminal/plan'){planRequests++;if(planDelay)await new Promise(resolve=>setTimeout(resolve,planDelay));value={account:'123',server:'Test-Demo',currency:'USD',risk:12.5,reward:25,mark_to_market:3,quote_time:Date.now()/1000,note:'Mock gross estimate; no trade placed'};}
     else if(endpoint==='/api/terminal/position-preview'){assert.equal(body.position,'42');proposedLevels={sl:Number(body.sl),tp:Number(body.tp)};value={preview:'mock-position-token',expires_in:60,account:'123',server:'Test-Demo',request:{action:6,position:42,symbol:'EURUSD',...proposedLevels}};}
     else if(endpoint==='/api/terminal/modify-preview'){pendingModification={price:Number(body.price),sl:Number(body.sl),tp:Number(body.tp)};value={preview:'mock-modify-token',expires_in:60,account:'123',server:'Test-Demo',request:{order:88,symbol:'EURUSD',...pendingModification}};}
@@ -258,6 +259,31 @@ let browser;
   await pickDraft('pick-entry',200);const beforeEntry=Number(await page.locator('#terminal-order-price').inputValue());await dragDraft(200,230);assert.ok(Number(await page.locator('#terminal-order-price').inputValue())<beforeEntry,'entry draft drags on chart');
   await pickDraft('pick-sl',270);const beforeSL=Number(await page.locator('#terminal-sl').inputValue());await dragDraft(270,290);assert.ok(Number(await page.locator('#terminal-sl').inputValue())<beforeSL,'SL draft drags on chart');
   await pickDraft('pick-tp',120);const beforeTP=Number(await page.locator('#terminal-tp').inputValue());await dragDraft(120,100);assert.ok(Number(await page.locator('#terminal-tp').inputValue())>beforeTP,'TP draft drags on chart');
+  const savedDraftForEstimate=await page.evaluate(()=>Object.fromEntries(['order-price','sl','tp','volume'].map(field=>[field,document.getElementById('terminal-'+field).value])));
+  await page.locator('#terminal-order-price').fill('1.102');await page.locator('#terminal-sl').fill('1.101');await page.locator('#terminal-tp').fill('1.103');await page.locator('#terminal-volume').fill('0.01');
+  await page.waitForFunction(()=>document.getElementById('terminal-ticket-estimate').textContent.includes('TP: +1.00 USD')&&!document.getElementById('terminal-ticket-estimate').textContent.includes('Updating'));
+  assert.match(await page.locator('[data-ticket-grip="tp"]').textContent(),/\+1.00 USD/);
+  assert.match(await page.locator('#terminal-ticket-estimate').textContent(),/SL: −1.00 USD/);
+  await page.locator('#terminal-chart').scrollIntoViewIfNeeded();
+  const liveGrip=await page.locator('[data-ticket-grip="tp"]').boundingBox(),liveChart=await page.locator('#terminal-chart').boundingBox(),liveRequests=draftEstimateCalls;
+  const beforeLiveDrag=await page.locator('#terminal-ticket-estimate').textContent();draftEstimateDelay=120;
+  await page.mouse.move(liveGrip.x+liveGrip.width/2,liveGrip.y+liveGrip.height/2);await page.mouse.down();
+  try{
+    for(let step=1;step<=16;step++){await page.mouse.move(liveChart.x+250,Math.max(liveChart.y+5,liveGrip.y-step*2));await page.waitForTimeout(60);}
+    assert.ok(draftEstimateCalls>liveRequests,'estimates are requested while the pointer stays down');
+    assert.notEqual((await page.locator('#terminal-ticket-estimate').textContent()).split(' · ')[0],beforeLiveDrag.split(' · ')[0],'profit amount updates before mouse release');
+    assert.ok(draftEstimateCalls-liveRequests<=10,'drag requests are bounded rather than sent per pointer event');
+  }finally{await page.mouse.up();}
+  draftEstimateDelay=0;await page.locator('#terminal-tp').fill('1.103');
+  await page.waitForFunction(()=>document.getElementById('terminal-ticket-estimate').textContent.includes('TP: +1.00 USD')&&!document.getElementById('terminal-ticket-estimate').textContent.includes('Updating'));
+  draftEstimateDelay=600;await page.locator('#terminal-volume').fill('0.02');
+  assert.match(await page.locator('#terminal-ticket-estimate').textContent(),/\+1.00 USD.*Updating/,'completed amount stays visible while recalculating');
+  await page.waitForFunction(()=>document.getElementById('terminal-ticket-estimate').textContent.includes('TP: +2.00 USD')&&!document.getElementById('terminal-ticket-estimate').textContent.includes('Updating'));
+  await page.locator('#terminal-clear-sl').click();
+  await page.waitForFunction(()=>!document.getElementById('terminal-ticket-estimate').textContent.includes('SL:'));
+  assert.equal(submissions,2,'draft estimates never submit orders');draftEstimateDelay=0;
+  for(const [field,value] of Object.entries(savedDraftForEstimate))await page.locator('#terminal-'+field).fill(value);
+
   await page.locator('[data-ticket-side="SELL"]').click();assert.ok((await page.locator('#terminal-order-hint').textContent()).includes('SELL STOP'),'sell below quote infers stop');
   await page.locator('[data-ticket-side="BUY"]').click();assert.ok((await page.locator('#terminal-order-hint').textContent()).includes('BUY LIMIT'),'buy below quote infers limit');assert.equal(submissions,2,'dragging sends no orders');
   await page.locator('#terminal-preview').click();await page.locator('#terminal-submit').waitFor();

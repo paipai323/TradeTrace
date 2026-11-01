@@ -15,6 +15,7 @@
   let ticketDraftHidden=saved.ticketDraftHidden===true;
   let closeToken=null,closePosition=null,cancelOrder=null,closeOperation='close',closeRevision=0,closeLoading=false,closing=false,closeExpiryTimer;
   let selectedDrawing=-1,drawingDrag=null,selectedPriceLines=[];
+  let ticketEstimate=null,ticketEstimateKey='',ticketEstimateContext='',ticketEstimateVersion=0,ticketEstimateTimer,ticketEstimateAt=0,ticketEstimatePending=false,ticketEstimateError='';
   let planEstimate=null,planEstimateKey='',planEstimateContext='',planEstimateRevision=0,planEstimateTimer,planEstimatePending=false,planEstimateAt=0;
   const workspaceKey=()=>JSON.stringify([scope,el('symbol').value,el('timeframe').value]);
   const drawingKey=()=>JSON.stringify([scope,el('symbol').value]);
@@ -196,12 +197,50 @@
       if(!node){node=document.createElement('div');const grip=text('button','');grip.type='button';grip.dataset.ticketGrip=item.field;grip.onpointerdown=event=>startTicketDrag(event,item.field,node._addY);node.append(grip);const remove=text('button','×');remove.type='button';remove.dataset.ticketRemove=item.field;remove.onclick=()=>{if(item.field==='order-price'){dismissTicketDraft();return;}el(item.field).value='';updateOrderKind();};node.append(remove);el('ticket-handles').append(node);ticketHandleNodes.set(item.field,node);}
       node._addY=item.add?item.addY:null;node.className='terminal-ticket-handle'+(item.add?' is-adder':'');node.style.setProperty('--level-color',item.color);node.style.left=item.left+'px';node.style.top=item.top+'px';
       const grip=node.firstChild;grip.disabled=!!editingPosition&&item.field==='order-price';grip.textContent=item.add?item.title:item.field==='order-price'?`${el('volume').value||'0'} · ${el('side').value} ${el('order-kind').value==='MARKET'?'Market':inferredKind()||'Pending'}`:`${item.title} · ${item.price.toFixed(market.digits)}`;
-      grip.title=item.add?'Drag to add '+(item.field==='sl'?'stop loss':'take profit'):'Drag to change '+item.title.toLowerCase();grip.dataset.ticketAdd=item.add?item.field:'';
+      if(!item.add&&item.field!=='order-price'&&Number.isFinite(ticketEstimate?.[item.field])){const previous=ticketEstimate.key!==ticketEstimateKey;grip.textContent=`${item.field.toUpperCase()} · ${previous?'~ ':''}${estimateMoney(ticketEstimate[item.field],ticketEstimate.currency)}`;}
+      grip.title=item.add?'Drag to add '+(item.field==='sl'?'stop loss':'take profit'):'Drag to change '+item.title.toLowerCase();grip.dataset.ticketAdd=item.add?item.field:'';if(!item.add&&item.field!=='order-price')grip.title+=` · Price ${item.price.toFixed(market.digits)} · Estimated gross P/L; excludes fees${ticketEstimate?.key!==ticketEstimateKey?' · Updating estimate':''}`;
       node.lastChild.hidden=item.add;node.lastChild.title=item.field==='order-price'?'Dismiss draft (no broker order changed)':'Remove '+(item.field==='sl'?'stop loss':'take profit');node.lastChild.setAttribute('aria-label',item.field==='order-price'?'Dismiss order draft':'Remove '+(item.field==='sl'?'stop loss':'take profit'));
     }
   }
+  function draftEstimateBody(){
+    if(!market||ticketDraftHidden||!el('show-ticket').checked)return null;
+    const body={symbol:el('symbol').value,side:el('side').value,entry:entryReference(),volume:Number(el('volume').value),sl:Number(el('sl').value),tp:Number(el('tp').value)};
+    return Object.values(body).filter(v=>typeof v==='number').every(Number.isFinite)&&body.entry>0&&body.volume>0&&body.sl>=0&&body.tp>=0&&(body.sl||body.tp)?body:null;
+  }
+  function estimateMoney(value,currency){return `${value>=0?'+':'−'}${Math.abs(value).toFixed(2)} ${currency}`;}
+  function renderTicketEstimate(){
+    const body=draftEstimateBody(),node=el('ticket-estimate');node.hidden=!body;
+    if(!body){node.textContent='';return;}
+    const stale=ticketEstimate&&ticketEstimate.key!==ticketEstimateKey;
+    const parts=['tp','sl'].filter(field=>body[field]>0).map(field=>{
+      const value=ticketEstimate?.[field];return `${field.toUpperCase()}: ${Number.isFinite(value)?estimateMoney(value,ticketEstimate.currency):'unavailable'}`;
+    });
+    node.textContent=ticketEstimate?`Est. ${parts.join(' · ')}${ticketEstimateError?' · Refresh unavailable (previous estimate)':stale?' · Updating (previous estimate)':''}. Excludes commission, swap and slippage.`:ticketEstimateError||'Estimating SL / TP amounts…';
+  }
+  function queueTicketEstimate(){
+    const body=draftEstimateBody(),context=JSON.stringify([scope,body?.symbol,body?.side,editingPosition?.ticket||editingOrder?.ticket||'draft']);
+    if(context!==ticketEstimateContext||!body){clearTimeout(ticketEstimateTimer);ticketEstimateVersion++;ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;ticketEstimatePending=false;ticketEstimateError='';ticketEstimateContext=context;}
+    if(!body){renderTicketEstimate();return;}
+    const key=JSON.stringify([scope,body]);
+    const unchanged=key===ticketEstimateKey;ticketEstimateKey=key;
+    if(ticketEstimatePending||(unchanged&&Date.now()-ticketEstimateAt<15000)){renderTicketEstimate();return;}
+    ticketEstimatePending=true;ticketEstimateError='';const version=ticketEstimateVersion;renderTicketEstimate();
+    // Sample the latest pointer position at a bounded rate. New pointer moves
+    // never postpone the timer or discard a completed sample during a drag.
+    ticketEstimateTimer=setTimeout(async()=>{
+      const sample=draftEstimateBody();if(version!==ticketEstimateVersion||!sample)return;
+      const sampleKey=JSON.stringify([scope,sample]);
+      try{
+        const result=await call('terminal/estimate',sample);if(version!==ticketEstimateVersion)return;
+        if(JSON.stringify([result.server,result.account])!==scope)throw Error('Account changed. Reconnect MT5.');
+        ticketEstimate={...result,key:sampleKey};ticketEstimateAt=Date.now();ticketEstimatePending=false;
+      }catch(error){if(version!==ticketEstimateVersion)return;ticketEstimatePending=false;ticketEstimateAt=Date.now();ticketEstimateError=error.message;}
+      renderTicketEstimate();renderTicketHandles(chart.paneSize(0));primitive?.update();
+      if(sampleKey!==ticketEstimateKey){ticketEstimateAt=0;queueTicketEstimate();}
+    },orderDrag?100:250);
+  }
   function syncDraftLines(){
-    if(!main)return;
+    queueTicketEstimate();if(!main)return;
     const levels=draftLevels();while(draftPriceLines.length>levels.length)main.removePriceLine(draftPriceLines.pop());
     levels.forEach((level,i)=>{const options={price:level.price,color:level.color,title:level.title,axisLabelVisible:true,lineVisible:true,lineWidth:2,lineStyle:L.LineStyle.Dashed};if(draftPriceLines[i])draftPriceLines[i].applyOptions(options);else draftPriceLines.push(main.createPriceLine(options));});renderTicketHandles(chart.paneSize(0));primitive?.update();
   }
@@ -410,7 +449,7 @@
     lastChartKey=workspaceKey();updateOrderHint();syncDraftLines();updateSelectionPrices();primitive.update();el('chart-empty').hidden=true;
   }
   function setTool(value){finishDrawingDrag(true);selectDrawing(-1);tool=value;pending=null;document.querySelectorAll('[data-drawing]').forEach(b=>{b.classList.toggle('selected',b.dataset.drawing===value);b.setAttribute('aria-pressed',String(b.dataset.drawing===value));});chart?.applyOptions({handleScroll:value==='cursor',handleScale:{axisPressedMouseMove:true,mouseWheel:value==='cursor',pinch:value==='cursor'}});el('chart').style.cursor=value==='cursor'?'crosshair':'copy';el('tool-hint').textContent=value==='cursor'?'Scroll to zoom · click drawings to select · drag empty space to pan':value==='level'?'Click anywhere in the price pane to place a level':isPosition({type:value})?'Click to place entry · drag entry, target, stop or width handles':'Click two anchors · Escape cancels';primitive?.update();}
-  function clearMarket(){finishOrderDrag(true);if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;bars=[];renderTicketHandles(chart.paneSize(0));renderBrokerHandles(chart.paneSize(0));lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
+  function clearMarket(){finishOrderDrag(true);if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;queueTicketEstimate();bars=[];renderTicketHandles(chart.paneSize(0));renderBrokerHandles(chart.paneSize(0));lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
   function selectionChanged(){revision++;clearMarket();setTool('cursor');persist();renderWatchlist();refresh();}
   function chooseSymbol(symbol){if(!symbols.includes(symbol))return;el('symbol').value=symbol;el('search').value='';el('search-results').hidden=true;selectionChanged();}
   function renderWatchlist(){
