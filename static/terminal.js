@@ -553,7 +553,7 @@
       const symbol=el('symbol').value,timeframe=el('timeframe').value;
       const next=await call('terminal/market',{symbol,timeframe});if(version!==revision||drawingDrag||orderDrag||conditionDrag)return;
       if(JSON.stringify([next.server,next.account])!==scope){autoReconnectBlocked=true;running=false;clearMarket();throw Error('MT5 account changed. Connect again to load its workspace.');}
-      market=next;bars=next.bars.map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4],volume:b[5]||0}));
+      market=next;rememberStructureHistory(timeframe,next);loadStructureDrafts();bars=next.bars.map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4],volume:b[5]||0}));
       const stale=Date.now()/1000-next.quote_time>30;
       el('feed').textContent=stale?'Last available quotes':next.demo?'Demo · connected':'Live · connected';el('feed').classList.toggle('online',!stale);
       el('chart-title').textContent=`${symbol} · ${intervalLabel(timeframe)}`;el('ticket-symbol').textContent=symbol;
@@ -712,18 +712,21 @@
     }
     conditionRun=null;conditionFinished=message;conditionLastResult=message;if(run?.applied)conditionApplied=run.applied;conditionMessage(message);saveConditions();renderSetupResult();
   }
-  function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
+  function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high','sensitivity'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
   function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
   function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
     const row=text('div','','terminal-condition-row');row.dataset.visible=String(value.visible!==false);row.dataset.conditionId=typeof value.id==='string'&&value.id&&!([...el('condition-list').children].some(item=>item.dataset.conditionId===value.id))?value.id:crypto.randomUUID();
     const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);const badge=text('span','Draft','terminal-condition-progress');badge.dataset.progress='draft';badge.setAttribute('aria-label','Condition progress');const duplicate=text('button','⧉','terminal-condition-duplicate');duplicate.type='button';duplicate.title='Duplicate condition';duplicate.setAttribute('aria-label','Duplicate condition');duplicate.onclick=event=>{event.stopPropagation();duplicateCondition(row);};header.append(summary,badge,duplicate);row.append(header,editor);
     row.onfocusin=event=>{if(event.target.matches('[data-field]'))conditionHistoryGroup={label:'Edit '+event.target.getAttribute('aria-label'),recorded:false};if(!event.target.closest('.terminal-condition-summary'))selectCondition(row);};row.onfocusout=event=>{if(event.target.matches('[data-field]'))conditionHistoryGroup=null;};row.onclick=event=>{if(row.isConnected&&!event.target.closest('.terminal-condition-summary'))selectCondition(row);};
     const visibility=text('label','Show on chart'),check=document.createElement('input');check.type='checkbox';check.checked=value.visible!==false;check.setAttribute('aria-label','Show condition on chart');check.onchange=()=>{row.dataset.visible=String(check.checked);saveConditions();};visibility.prepend(check);header.append(visibility);
-    const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);if(!options){const pick=text('button','Pick on chart');pick.type='button';pick.onclick=()=>{setTool('cursor');selectCondition(row);conditionPick={row,field:name};el('tool-hint').textContent='Click the chart to set condition '+name+' · Escape cancels';};label.append(pick);}editor.append(label);return input;};
+    const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);if(!options&&name!=='sensitivity'){const pick=text('button','Pick on chart');pick.type='button';pick.onclick=()=>{setTool('cursor');selectCondition(row);conditionPick={row,field:name};el('tool-hint').textContent='Click the chart to set condition '+name+' · Escape cancels';};label.append(pick);}editor.append(label);return input;};
     const rule=add('Rule','rule',Object.entries(C.rules)),mode=add('Evaluate','mode',[['LIVE','Live Bid'],['CANDLE','Completed candle']]),tf=add('Timeframe','timeframe',C.frames.map(f=>[f,f]));
+    value={sensitivity:2,...value};
+    const sensitivity=add('Swing candles each side','sensitivity');sensitivity.min='1';sensitivity.max='10';sensitivity.step='1';
+    const structureNote=text('p','','terminal-muted');editor.append(structureNote);
     const level=add('Price level','level'),low=add('Zone low','low'),high=add('Zone high','high');
-    const update=()=>{conditionPick=null;if(C.candleOnly(rule.value))mode.value='CANDLE';mode.disabled=C.candleOnly(rule.value);tf.parentNode.hidden=mode.value==='LIVE';level.parentNode.hidden=C.zone(rule.value);low.parentNode.hidden=high.parentNode.hidden=!C.zone(rule.value);saveConditions();};
-    row.onchange=event=>{const apply=()=>{if(event.target===rule){if(C.zone(rule.value))seedConditionZone(row);else seedConditionLevel(row);}update();};if(event.target.matches('select[data-field]'))conditionHistoryTransaction('Edit '+event.target.getAttribute('aria-label'),apply);else apply();};row.oninput=event=>{if(event.target.tagName!=='SELECT')saveConditions();};
+    const update=()=>{conditionPick=null;if(C.candleOnly(rule.value))mode.value='CANDLE';mode.disabled=C.candleOnly(rule.value);tf.parentNode.hidden=mode.value==='LIVE';level.parentNode.hidden=C.zone(rule.value)||C.structure(rule.value);sensitivity.disabled=!C.structure(rule.value);sensitivity.parentNode.hidden=structureNote.hidden=!C.structure(rule.value);structureNote.textContent='Confirmed swings only. A swing needs '+sensitivity.value+' closed candles to its right. Wicks do not count as breaks.';low.parentNode.hidden=high.parentNode.hidden=!C.zone(rule.value);saveConditions();};
+    row.onchange=event=>{const apply=()=>{if(event.target===rule){if(C.zone(rule.value))seedConditionZone(row);else if(!C.structure(rule.value))seedConditionLevel(row);}update();};if(event.target.matches('select[data-field]'))conditionHistoryTransaction('Edit '+event.target.getAttribute('aria-label'),apply);else apply();};row.oninput=event=>{if(event.target.tagName!=='SELECT'){structureNote.textContent='Confirmed swings only. A swing needs '+sensitivity.value+' closed candles to its right. Wicks do not count as breaks.';saveConditions();}};
     for(const [label,action] of [['↑',()=>{if(row.previousElementSibling)row.previousElementSibling.before(row);}],['↓',()=>{if(row.nextElementSibling)row.nextElementSibling.after(row);}],['Remove',()=>row.remove()]]){const button=text('button',label);button.type='button';button.setAttribute('aria-label',label==='↑'?'Move condition up':label==='↓'?'Move condition down':'Remove condition');button.onclick=event=>{event.stopPropagation();conditionHistoryTransaction(label==='Remove'?'Remove condition':label==='↑'?'Move condition up':'Move condition down',action);};editor.append(button);}
     el('condition-list').append(row);selectCondition(row);update();return row;
   }
@@ -821,19 +824,20 @@
         if(JSON.stringify([data.server,data.account])!==run.scope)throw Error('Account changed.');
         // The final bar is forming; only prior bars can satisfy candle rules.
         candles=data.bars.slice(0,-1).map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4]}));
-        if(candles.length<2)throw Error('Not enough completed candles.');
+        if(candles.length<2&&!C.structure(step.rule))throw Error('Not enough completed candles.');
       }catch(error){stopConditions('Stopped: '+error.message);return;}
     }
     const complete=run.sequence.observe({bid:next.bid,time:next.quote_time,candles});
+    if(C.structure(step?.rule))run.structureStatus=run.sequence.structureState?.status;else run.structureStatus='';
     for(const event of run.sequence.events){
       run.observations.push({...event,observed_at:Date.now(),quote_time:next.quote_time,bid:next.bid,candle:step?.mode==='CANDLE'?structuredClone(candles.at(-1)):null});
       if(run.observations.length>100)run.observations.shift();
       if(event.type==='reset')logConditionEvent('Reset',event.reason==='quote-gap'?`${event.seconds.toFixed(0)}s without a fresh quote. Progress reset to step 1.`:`Sequence timeout after ${event.seconds.toFixed(0)}s. Progress reset to step 1.`,run);
-      else{const item=run.sequence.rows[event.index],criterion=C.zone(item.rule)?`${item.low}–${item.high}`:item.level,observation=item.mode==='LIVE'?`Bid ${next.bid.toFixed(next.digits)}`:`${item.timeframe} closed candle ${candles.at(-1)?.close}`;logConditionEvent('Step passed',`Step ${event.index+1}/${run.sequence.rows.length}: ${C.rules[item.rule]} ${criterion} · ${observation}.`,run);}
+      else{const item=run.sequence.rows[event.index],criterion=event.structure?`${event.structure.level} (${event.structure.type}, swing ${new Date(event.structure.swing_time*1000).toISOString()})`:C.zone(item.rule)?`${item.low}–${item.high}`:item.level,observation=item.mode==='LIVE'?`Bid ${next.bid.toFixed(next.digits)}`:`${item.timeframe} closed candle ${candles.at(-1)?.close}`;logConditionEvent('Step passed',`Step ${event.index+1}/${run.sequence.rows.length}: ${C.rules[item.rule]} ${criterion} · ${observation}.`,run);}
     }
     run.applied.index=run.sequence.index;run.applied.state=complete?'finished':'running';renderConditionProgress();
     if(complete)await conditionComplete(run);
-    else conditionMessage(`${run.action==='AUTO'?`${market?.demo?'DEMO':'LIVE'} ORDER ARMED`:'Monitoring'} · step ${run.sequence.index+1} of ${run.sequence.rows.length}. Draft edits require Start again.`);
+    else conditionMessage(`${run.action==='AUTO'?`${market?.demo?'DEMO':'LIVE'} ORDER ARMED`:'Monitoring'} · step ${run.sequence.index+1} of ${run.sequence.rows.length}${run.structureStatus?' · '+run.structureStatus:''}. Draft edits require Start again.`);
   }
 
   let selectedConditionRow=null,conditionPick=null;
@@ -873,11 +877,45 @@
     for(const item of el('condition-list').children){item.classList.toggle('active',item===row);item.querySelector('.terminal-condition-editor').hidden=item!==row;item.querySelector('.terminal-condition-summary').setAttribute('aria-expanded',String(item===row));}
     primitive?.update();
   }
+  const structureHistories=new Map(),structureRequests=new Map();
+  const structureKey=tf=>JSON.stringify([scope,el('symbol').value,tf]);
+  function rememberStructureHistory(tf,data){
+    const key=structureKey(tf),candles=data.bars.slice(0,-1).map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4]}));
+    const prior=structureHistories.get(key);if(prior?.last===candles.at(-1)?.time){prior.fetched=Date.now();return;}
+    structureHistories.set(key,{candles,last:candles.at(-1)?.time,fetched:Date.now(),analyses:new Map()});
+    if(structureHistories.size>40)structureHistories.delete(structureHistories.keys().next().value);
+  }
+  function draftStructure(row){
+    const key=structureKey(row.timeframe),history=structureHistories.get(key);
+    if(!history)return {status:'Loading completed candles',bias:0};
+    if(history.error)return {status:history.error,bias:0};
+    if(!history.analyses.has(row.sensitivity)){const model=new C.Structure(row.sensitivity);for(const candle of history.candles)model.push(candle);history.analyses.set(row.sensitivity,model);}
+    return history.analyses.get(row.sensitivity).snapshot(row.rule);
+  }
+  function loadStructureDrafts(){
+    if(!market)return;
+    for(const tf of new Set(conditionRows().filter(row=>C.structure(row.rule)).map(row=>row.timeframe))){
+      if(tf===el('timeframe').value)continue;
+      const key=structureKey(tf);if(structureRequests.has(key)||Date.now()-(structureHistories.get(key)?.fetched||0)<1500)continue;
+      const requestScope=scope,symbol=el('symbol').value;structureRequests.set(key,true);
+      call('terminal/market',{symbol,timeframe:tf}).then(data=>{
+        if(scope!==requestScope||el('symbol').value!==symbol||JSON.stringify([data.server,data.account])!==scope)return;
+        rememberStructureHistory(tf,data);renderConditionComparison();primitive?.update();
+      }).catch(()=>{if(scope===requestScope&&el('symbol').value===symbol)structureHistories.set(key,{error:'Completed candles unavailable; check broker history',fetched:Date.now()});}).finally(()=>structureRequests.delete(key));
+    }
+  }
   function conditionChartItems(){
     if(!market||!main||conditionDraftScope!==conditionStorage())return [];
     return [...el('condition-list').children].flatMap((row,index)=>{
       if(row.dataset.visible==='false')return [];
-      const zone=C.zone(conditionInput(row,'rule').value);
+      const rule=conditionInput(row,'rule').value,zone=C.zone(rule);
+      if(C.structure(rule)){
+        const draft=conditionRows()[index];if(Object.keys(C.fieldErrors(draft)).length)return [];
+        if(!el('condition-show-levels').checked&&row!==selectedConditionRow)return [];
+        const active=conditionRun?.sequence.index===index&&conditionSignature(draft)===conditionSignature(conditionRun.sequence.rows[index]);
+        const model=active&&conditionRun.sequence.structureState?conditionRun.sequence.structureState:draftStructure(draft),price=model.level,y=price?main.priceToCoordinate(price):null;
+        return price>0&&!model.broken&&Number.isFinite(y)?[{row,index,field:'structure',price,y,color:'#bba2ff',readonly:true,label:`${C.rules[rule]} ${conditionInput(row,'timeframe').value}`}]:[];
+      }
       if(!(zone?el('condition-show-zones'):el('condition-show-levels')).checked&&row!==selectedConditionRow)return [];
       const low=Number(conditionInput(row,'low').value),high=Number(conditionInput(row,'high').value);
       if(zone&&!(low>0&&high>low))return [];
@@ -902,17 +940,17 @@
       if(!button){button=text('button','','terminal-condition-handle');button.type='button';button.dataset.conditionGrip=item.field;button.onpointerdown=event=>startConditionDrag(event,button._condition);el('ticket-handles').append(button);conditionHandleNodes.set(key,button);}
       button._condition=item;button.style.setProperty('--condition-color',item.color);
       button.style.top=Math.max(0,Math.min(size.height-25,item.y-12))+'px';
-      const label=`C${item.index+1} ${item.field==='zone'?'Move zone':item.field==='level'?'Level':item.field==='low'?'Zone low':'Zone high'} · ${item.price.toFixed(market.digits)}`;
+      const label=`C${item.index+1} ${item.readonly?item.label:item.field==='zone'?'Move zone':item.field==='level'?'Level':item.field==='low'?'Zone low':'Zone high'} · ${item.price.toFixed(market.digits)}`;
       if(button.textContent!==label)button.textContent=label;
       button.style.left=Math.max(0,Math.min(item.field==='zone'?180:8,size.width-button.offsetWidth-4))+'px';
-      button.title='Drag to change this condition draft. Start is required to apply changes to monitoring.';
+      button.title=item.readonly?'Calculated confirmed swing. Change timeframe or sensitivity in Conditions.':'Drag to change this condition draft. Start is required to apply changes to monitoring.';button.style.cursor=item.readonly?'pointer':'';
     }
     for(const [key,node] of conditionHandleNodes)if(!visible.has(key)){node.remove();conditionHandleNodes.delete(key);}
     ctx.restore();
   }
-  function conditionLineHit(p){return conditionChartItems().filter(item=>item.row===selectedConditionRow&&item.field!=='zone'&&Math.abs(item.y-p.y)<=6).sort((a,b)=>Math.abs(a.y-p.y)-Math.abs(b.y-p.y))[0];}
+  function conditionLineHit(p){return conditionChartItems().filter(item=>!item.readonly&&item.row===selectedConditionRow&&item.field!=='zone'&&Math.abs(item.y-p.y)<=6).sort((a,b)=>Math.abs(a.y-p.y)-Math.abs(b.y-p.y))[0];}
   function startConditionDrag(event,item){
-    if(event.button!==0||!market||!item)return;
+    if(event.button!==0||!market||!item)return;if(item.readonly){event.preventDefault();event.stopPropagation();selectCondition(item.row);return;}
     setTool('cursor');selectCondition(item.row);selectDrawing(-1);
     const original=Object.fromEntries(['level','low','high'].map(field=>[field,conditionInput(item.row,field).value]));
     const y=event.clientY-el('chart').getBoundingClientRect().top;
@@ -964,10 +1002,11 @@
   function updateConditionSummaries(){
     for(const [index,row] of [...el('condition-list').children].entries()){
       const value=field=>conditionInput(row,field)?.value||'',zone=C.zone(value('rule'));
-      const prices=zone?`${value('low')||'…'}–${value('high')||'…'}`:value('level')||'…';
+      const prices=C.structure(value('rule'))?`${value('sensitivity')} each side`:zone?`${value('low')||'…'}–${value('high')||'…'}`:value('level')||'…';
       const summary=`${index+1}. ${C.rules[value('rule')]||'Choose rule'} · ${prices} · ${value('mode')==='LIVE'?'Bid':value('timeframe')}`;
       const button=row.querySelector('.terminal-condition-summary');if(button.textContent!==summary)button.textContent=summary;
     }
+    loadStructureDrafts();
     el('condition-empty').hidden=el('condition-list').children.length>0;renderConditionProgress();renderConditionValidation();
   }
   function renderSetupResult(){
@@ -985,7 +1024,7 @@
     conditionMessage('Draft. Configure conditions and order, then Start.');
     saveConditions();renderSetupResult();selectSetupTab('conditions');
   };
-  const conditionSignature=row=>JSON.stringify(['rule','mode','timeframe','level','low','high'].map(key=>row?.[key]));
+  const conditionSignature=row=>JSON.stringify(['rule','mode','timeframe','level','low','high','sensitivity'].map(key=>key==='sensitivity'&&!C.structure(row?.rule)?null:row?.[key]));
   function renderConditionProgress(){
     const draft=conditionRows();
     for(const [index,row] of [...el('condition-list').children].entries()){
@@ -1046,7 +1085,7 @@
       let warning=row.querySelector('.terminal-condition-invalid');
       if(!warning){warning=text('span','!','terminal-condition-invalid');warning.setAttribute('aria-label','Condition needs attention');row.querySelector('.terminal-condition-row-header').append(warning);}
       warning.hidden=!hasErrors;warning.title=Object.values(errors).join(' ');
-      for(const field of ['rule','mode','timeframe','level','low','high']){
+      for(const field of ['rule','mode','timeframe','level','low','high','sensitivity']){
         const input=conditionInput(row,field);let note=input.parentElement.querySelector(`[data-error-for="${field}"]`);
         if(!note){note=text('small','','terminal-condition-field-error');note.dataset.errorFor=field;note.id=`condition-${row.dataset.conditionId}-${field}-error`;input.parentElement.append(note);input.setAttribute('aria-describedby',note.id);}
         const message=errors[field]||'';if(note.textContent!==message)note.textContent=message;note.hidden=!message;input.setAttribute('aria-invalid',String(!!message));
@@ -1130,7 +1169,7 @@
     return {action:{ALERT:'Alerts only',REVIEW:'Prepare for review',AUTO:'Automatic entry'}[settings.action]||'Not set',sizing:settings.sizing==='AUTO'?'2% equity':'Manual lots',side:ticket.side||'Not set',kind:ticket['order-kind']==='PENDING'?'Pending':'Market',entry:ticket['order-kind']==='PENDING'?comparisonPrice(ticket['order-price']):'Market quote',volume:settings.sizing==='AUTO'?'Auto (2% equity)':comparisonPrice(ticket.volume),sl:comparisonPrice(ticket.sl),tp:comparisonPrice(ticket.tp),timeout:timing(settings.timeout,'min'),gap:timing(settings.gap,'s')};
   }
   function comparisonCondition(row){
-    if(!row)return '—';const price=C.zone(row.rule)?`${comparisonPrice(row.low)} – ${comparisonPrice(row.high)}`:comparisonPrice(row.level);
+    if(!row)return '—';const price=C.structure(row.rule)?`${row.sensitivity} candles each side`:C.zone(row.rule)?`${comparisonPrice(row.low)} – ${comparisonPrice(row.high)}`:comparisonPrice(row.level);
     return `${C.rules[row.rule]||'Choose rule'} · ${price} · ${row.mode==='LIVE'?'Live Bid':row.timeframe+' candle'}`;
   }
   function renderConditionComparison(){
@@ -1189,7 +1228,7 @@
       const name=el('condition-template-name').value.trim();if(!name||name.length>60)throw Error('Enter a template name of 1–60 characters.');
       const rows=C.validate(conditionRows());if(!rows.length)throw Error('Add at least one valid condition before saving.');
       const settings=conditionComparisonSettings();if(![settings.timeout,settings.gap].every(value=>value!==''&&Number.isFinite(Number(value))&&Number(value)>=0))throw Error('Fix the timing settings before saving.');
-      const prices=rows.flatMap(row=>C.zone(row.rule)?[row.low,row.high]:[row.level]),anchor=(Math.min(...prices)+Math.max(...prices))/2;
+      const prices=rows.filter(row=>!C.structure(row.rule)).flatMap(row=>C.zone(row.rule)?[row.low,row.high]:[row.level]),anchor=prices.length?(Math.min(...prices)+Math.max(...prices))/2:(market?.bid||0);
       const previous=conditionTemplates.find(item=>item.name.toLowerCase()===name.toLowerCase());if(!previous&&conditionTemplates.length>=30)throw Error('The template library is full (30 templates). Remove one before saving another.');
       const template={id:previous?.id||crypto.randomUUID(),name,symbol:el('symbol').value,rows:structuredClone(rows),settings:structuredClone(settings),anchor,updated:Date.now()};
       persistConditionTemplates([...conditionTemplates.filter(item=>item.id!==template.id),template].sort((a,b)=>a.name.localeCompare(b.name)),template.id);
@@ -1211,7 +1250,7 @@
         if(!(Number.isFinite(center)&&center>0&&Number.isFinite(template.anchor)&&template.anchor>0))throw Error('Load visible chart prices before repositioning this template.');ratio=center/template.anchor;
       }
       const price=value=>Number(value)>0?(reposition?planPrice(Number(value)*ratio):Number(value)):0;
-      for(const row of rows){row.id=crypto.randomUUID();if(reposition){if(C.zone(row.rule)){row.low=price(row.low);row.high=planPrice(Math.max(price(row.high),row.low+(market.tick_size||10**-market.digits)));row.level=0;}else{row.level=price(row.level);row.low=0;row.high=0;}}}
+      for(const row of rows){row.id=crypto.randomUUID();if(reposition&&!C.structure(row.rule)){if(C.zone(row.rule)){row.low=price(row.low);row.high=planPrice(Math.max(price(row.high),row.low+(market.tick_size||10**-market.digits)));row.level=0;}else{row.level=price(row.level);row.low=0;row.high=0;}}}
       C.validate(rows);
       conditionHistoryTransaction('Load template',()=>{
         el('setup-new').click();
@@ -1234,6 +1273,7 @@
   function renderConditionPreview(){
     const phrase=row=>{
       if(Object.keys(C.fieldErrors(row)).length)return 'This condition needs valid fields before it can be previewed';
+      if(C.structure(row.rule))return `${C.rules[row.rule]} on ${row.timeframe}: a candle closes ${row.rule.endsWith('_UP')?'above a confirmed swing high':'below a confirmed swing low'}, ${row.rule.startsWith('BOS')?'continuing':'changing'} structure direction, using ${row.sensitivity} candles each side`;
       const live=row.mode==='LIVE',candle=`a newly closed ${row.timeframe} candle`,level=comparisonPrice(row.level),zone=`${comparisonPrice(row.low)}–${comparisonPrice(row.high)}`;
       switch(row.rule){
         case 'ZONE_ENTER':return live?`Bid enters ${zone} from outside`:`${candle} overlaps ${zone} after the previous candle range was outside`;
@@ -1263,6 +1303,7 @@
     add('Quotes',fresh?'ready':'blocked',!market?'Connect MT5 and load this market.':fresh?'Current broker quote available.':'Quote is stale. Wait for a fresh quote or reconnect.');
     const rows=conditionRows(),invalid=rows.map((row,index)=>Object.keys(C.fieldErrors(row)).length?index+1:0).filter(Boolean);
     add('Conditions',conditionDraftValid?'ready':'blocked',invalid.length?`Fix highlighted fields in condition ${invalid.join(', ')}.`:!conditionDraftValid?'Fix timeout or quote-gap settings.':rows.length?`${rows.length} valid condition${rows.length===1?'':'s'}, in order.`:'No conditions: Start acts immediately.');
+    for(const [index,row] of rows.entries())if(C.structure(row.rule)&&!Object.keys(C.fieldErrors(row)).length){const info=draftStructure(row);add(`Structure step ${index+1}`,'waiting',`${row.timeframe} · ${info.status}. Only a new close while this step is active can pass.`);}
     if(trade){
       add('Trading permissions',market?.trading_allowed===false?'blocked':market?.trading_allowed===true?'ready':'pending',market?.trading_allowed===false?'Enable account trading, Algo Trading and external Python trading in MT5.':market?.trading_allowed===true?'MT5 trading permissions enabled.':'Permissions will be checked by MT5 before execution.');
       const sl=Number(el('sl').value),tp=Number(el('tp').value),pending=el('order-kind').value!=='MARKET',entry=Number(el('order-price').value),buy=el('side').value==='BUY';
@@ -1292,7 +1333,7 @@
     set('setup-readiness-action',outcome);
     set('setup-readiness-state',blocked.length?`${blocked.length} to fix`:'Ready to start');
     const list=el('setup-readiness-checks'),key=JSON.stringify(checks);
-    if(list.dataset.key!==key){list.dataset.key=key;list.replaceChildren(...checks.map(item=>{const row=text('li',`${item.state==='blocked'?'Fix':item.state==='pending'?'At execution':'OK'} · ${item.name}: ${item.message}`);row.dataset.state=item.state;return row;}));}
+    if(list.dataset.key!==key){list.dataset.key=key;list.replaceChildren(...checks.map(item=>{const row=text('li',`${item.state==='blocked'?'Fix':item.state==='pending'?'At execution':item.state==='waiting'?'While monitoring':'OK'} · ${item.name}: ${item.message}`);row.dataset.state=item.state;return row;}));}
     el('condition-start').disabled=!!blocked.length;
   }
 
