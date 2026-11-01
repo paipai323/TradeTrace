@@ -630,7 +630,7 @@
   el('order-kind').onchange=updateOrderKind;el('side').onchange=updateOrderKind;
   document.querySelectorAll('[data-ticket-mode]').forEach(button=>button.onclick=()=>{el('order-kind').value=button.dataset.ticketMode;updateOrderKind();});
   el('show-ticket').onchange=()=>{syncDraftLines();};
-  el('ticket').oninput=()=>{ticketDraftHidden=false;saved.ticketDraftHidden=false;updateOrderHint();invalidate();syncDraftLines();};
+  el('ticket').oninput=event=>{if(!['terminal-order-price','terminal-volume','terminal-sl','terminal-tp'].includes(event.target.id))return;ticketDraftHidden=false;saved.ticketDraftHidden=false;updateOrderHint();invalidate();syncDraftLines();};
   el('ticket').onsubmit=async event=>{
     event.preventDefault();if(submitting||reviewing||closing)return;invalidate();reviewing=true;updateTicket();const version=ticketRevision;
     const body={symbol:el('symbol').value,side:el('side').value,order_kind:el('order-kind').value,price:el('order-price').value,volume:el('volume').value,sl:el('sl').value,tp:el('tp').value};
@@ -712,7 +712,7 @@
   }
   el('condition-add').onclick=()=>{restoreConditions();conditionRow();};
   for(const name of ['sizing','timeout','gap'])el('condition-'+name).addEventListener('change',saveConditions);
-  el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;updateOrderKind();});
+  el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;invalidate();syncDraftLines();});
   el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic demo entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';if(conditionRun)stopConditions('Stopped: entry mode changed. Start to apply your draft.');};
   el('conditions-panel').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT')event.preventDefault();});
   el('condition-stop').onclick=()=>stopConditions('Stopped. No future condition order will be sent. Check MT5 for any request already submitted.');
