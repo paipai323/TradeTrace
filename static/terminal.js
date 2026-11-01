@@ -103,7 +103,7 @@
   function invalidate(clear=true){ticketRevision++;preview=null;clearTimeout(expiryTimer);el('submit').hidden=true;if(clear)el('order-summary').replaceChildren();updateTicket();}
   function updateTicket(){
     const fresh=market&&Date.now()/1000-market.quote_time<=30&&market.quote_time<=Date.now()/1000+5;
-    el('preview').disabled=!market?.demo||!fresh||submitting||reviewing||closing;
+    el('preview').disabled=!market?.demo||!fresh||submitting||reviewing||closing||(autoDraftSizing()&&(!ticketEstimate?.auto_volume||ticketEstimate.key!==ticketEstimateKey||!!ticketEstimateError));
     el('alert-add').disabled=!market;
   }
   function cancelClose(hide=true){
@@ -228,47 +228,76 @@
     for(const item of items){
       let node=ticketHandleNodes.get(item.field);
       if(!node){node=document.createElement('div');const grip=text('button','');grip.type='button';grip.dataset.ticketGrip=item.field;grip.onpointerdown=event=>startTicketDrag(event,item.field,node._addY);node.append(grip);const remove=text('button','×');remove.type='button';remove.dataset.ticketRemove=item.field;remove.onclick=()=>{if(item.field==='order-price'){dismissTicketDraft();return;}el(item.field).value='';updateOrderKind();};node.append(remove);el('ticket-handles').append(node);ticketHandleNodes.set(item.field,node);}
-      node._addY=item.add?item.addY:null;node.className='terminal-ticket-handle'+(item.add?' is-adder':'');node.style.setProperty('--level-color',item.color);node.style.left=item.left+'px';node.style.top=item.top+'px';
-      const grip=node.firstChild;grip.disabled=!!editingPosition&&item.field==='order-price';grip.textContent=item.add?item.title:item.field==='order-price'?`${el('volume').value||'0'} · ${el('side').value} ${el('order-kind').value==='MARKET'?'Market':inferredKind()||'Pending'}`:`${item.title} · ${item.price.toFixed(market.digits)}`;
-      if(!item.add&&item.field!=='order-price'&&Number.isFinite(ticketEstimate?.[item.field])){const previous=ticketEstimate.key!==ticketEstimateKey;grip.textContent=`${item.field.toUpperCase()} · ${previous?'~ ':''}${estimateMoney(ticketEstimate[item.field],ticketEstimate.currency)}`;}
+      node._addY=item.add?item.addY:null;node.className='terminal-ticket-handle'+(item.add?' is-adder':'');node.style.setProperty('--level-color',item.color);node.style.top=item.top+'px';
+      const grip=node.firstChild,price=Number.isFinite(item.price)?item.price.toFixed(market.digits):'';
+      const sizing=autoDraftSizing()?(ticketEstimateError?'2% equity · '+ticketEstimateError:!Number(el('sl').value)?'2% equity · add SL':ticketEstimate?.auto_volume?`${ticketEstimate.auto_volume} lots · 2% equity`:'2% equity · sizing…'):`${el('volume').value||'0'} lots`;
+      grip.disabled=!!editingPosition&&item.field==='order-price';
+      let label=item.add?item.title:item.field==='order-price'?`${el('side').value} ${el('order-kind').value==='MARKET'?'Market':inferredKind()||'Pending'} @ ${price} · ${sizing}`:`${item.title} @ ${price}`;
+      if(!item.add&&item.field!=='order-price'&&Number.isFinite(ticketEstimate?.[item.field])&&!(autoDraftSizing()&&ticketEstimateError))label=`${item.field.toUpperCase()} @ ${price} · ${estimateMoney(ticketEstimate[item.field],ticketEstimate.currency)}`;
+      if(grip.textContent!==label)grip.textContent=label;
       grip.title=item.add?'Drag to add '+(item.field==='sl'?'stop loss':'take profit'):'Drag to change '+item.title.toLowerCase();grip.dataset.ticketAdd=item.add?item.field:'';if(!item.add&&item.field!=='order-price')grip.title+=` · Price ${item.price.toFixed(market.digits)} · Estimated gross P/L; excludes fees${ticketEstimate?.key!==ticketEstimateKey?' · Updating estimate':''}`;
+      if(!item.add&&item.field==='order-price'&&autoDraftSizing()&&ticketEstimateError)grip.title+=' · '+ticketEstimateError;
       node.lastChild.hidden=item.add;node.lastChild.title=item.field==='order-price'?'Dismiss draft (no broker order changed)':'Remove '+(item.field==='sl'?'stop loss':'take profit');node.lastChild.setAttribute('aria-label',item.field==='order-price'?'Dismiss order draft':'Remove '+(item.field==='sl'?'stop loss':'take profit'));
+      node.style.left=Math.max(0,Math.min(item.left,size.width-node.offsetWidth-4))+'px';
     }
   }
+  function autoDraftSizing(){return el('condition-sizing')?.value==='AUTO'&&!editingPosition&&!editingOrder;}
   function draftEstimateBody(){
     if(!market||ticketDraftHidden||!el('show-ticket').checked)return null;
     const body={symbol:el('symbol').value,side:el('side').value,entry:entryReference(),volume:Number(el('volume').value),sl:Number(el('sl').value),tp:Number(el('tp').value)};
+    if(autoDraftSizing()){body.risk_auto=true;body.volume=market.volume_min;body.equity=market.equity;if(!body.sl)return null;}
     return Object.values(body).filter(v=>typeof v==='number').every(Number.isFinite)&&body.entry>0&&body.volume>0&&body.sl>=0&&body.tp>=0&&(body.sl||body.tp)?body:null;
   }
   function estimateMoney(value,currency){return `${value>=0?'+':'−'}${Math.abs(value).toFixed(2)} ${currency}`;}
   function renderTicketEstimate(){
-    const body=draftEstimateBody(),node=el('ticket-estimate');node.hidden=!body;
-    if(!body){node.textContent='';return;}
+    const body=draftEstimateBody(),node=el('ticket-estimate');node.hidden=!body&&!autoDraftSizing();
+    const show=message=>{if(node.textContent!==message)node.textContent=message;};
+    if(!body){show(autoDraftSizing()?'2% equity sizing: add a valid stop loss to calculate lots.':'');return;}
+    if(body.risk_auto&&ticketEstimateError){show(`2% equity: ${ticketEstimateError} No valid automatic lot size for this draft.`);return;}
     const stale=ticketEstimate&&ticketEstimate.key!==ticketEstimateKey;
     const parts=['tp','sl'].filter(field=>body[field]>0).map(field=>{
       const value=ticketEstimate?.[field];return `${field.toUpperCase()}: ${Number.isFinite(value)?estimateMoney(value,ticketEstimate.currency):'unavailable'}`;
     });
-    node.textContent=ticketEstimate?`Est. ${parts.join(' · ')}${ticketEstimateError?' · Refresh unavailable (previous estimate)':stale?' · Updating (previous estimate)':''}. Excludes commission, swap and slippage.`:ticketEstimateError||'Estimating SL / TP amounts…';
+    const sizing=body.risk_auto&&ticketEstimate?.auto_volume?`2% equity · ${ticketEstimate.auto_volume} lots · Budget ${ticketEstimate.risk_budget.toFixed(2)} ${ticketEstimate.currency} · Modeled risk ${ticketEstimate.modeled_risk.toFixed(2)} ${ticketEstimate.currency}. `:'';
+    node.title=stale?'Updating · showing the last completed estimate':'';
+    show(ticketEstimate?`${sizing}Est. ${parts.join(' · ')}${ticketEstimateError?' · '+ticketEstimateError+' (previous estimate)':''}. Excludes commission, swap and slippage.`:ticketEstimateError||'Estimating SL / TP amounts…');
   }
   function queueTicketEstimate(){
+    const automatic=autoDraftSizing();el('volume').disabled=automatic||!!editingPosition||!!editingOrder;
+    for(const name of ['volume-down','volume-up'])el(name).disabled=automatic||!!editingPosition||!!editingOrder;
     const body=draftEstimateBody(),context=JSON.stringify([scope,body?.symbol,body?.side,editingPosition?.ticket||editingOrder?.ticket||'draft']);
     if(context!==ticketEstimateContext||!body){clearTimeout(ticketEstimateTimer);ticketEstimateVersion++;ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;ticketEstimatePending=false;ticketEstimateError='';ticketEstimateContext=context;}
-    if(!body){renderTicketEstimate();return;}
+    if(!body){renderTicketEstimate();updateTicket();return;}
     const key=JSON.stringify([scope,body]);
     const unchanged=key===ticketEstimateKey;ticketEstimateKey=key;
     if(ticketEstimatePending||(unchanged&&Date.now()-ticketEstimateAt<15000)){renderTicketEstimate();return;}
-    ticketEstimatePending=true;ticketEstimateError='';const version=ticketEstimateVersion;renderTicketEstimate();
+    ticketEstimatePending=true;const version=ticketEstimateVersion;renderTicketEstimate();
     // Sample the latest pointer position at a bounded rate. New pointer moves
     // never postpone the timer or discard a completed sample during a drag.
     ticketEstimateTimer=setTimeout(async()=>{
       const sample=draftEstimateBody();if(version!==ticketEstimateVersion||!sample)return;
       const sampleKey=JSON.stringify([scope,sample]);
       try{
-        const result=await call('terminal/estimate',sample);if(version!==ticketEstimateVersion)return;
+        let sizing={};
+        if(sample.risk_auto){
+          const direction=sample.side==='BUY'?1:-1;
+          if(direction*(sample.entry-sample.sl)<=0)throw Error('Stop loss must be on the correct side of entry for 2% sizing.');
+          const adverse=sample.entry+direction*20*(market.point||market.tick_size);
+          const basis=await call('terminal/estimate',{...sample,entry:adverse,tp:0});
+          if(version!==ticketEstimateVersion)return;
+          if(JSON.stringify([basis.server,basis.account])!==scope)throw Error('Account changed. Reconnect MT5.');
+          const loss=-basis.sl,budget=sample.equity*.02;
+          if(!Number.isFinite(loss)||loss<=0||!Number.isFinite(budget)||budget<=0)throw Error('Broker risk estimate unavailable.');
+          const volume=Number((Math.floor(Math.min(market.volume_max,budget/loss*sample.volume)/market.volume_step)*market.volume_step).toFixed(8));
+          if(volume<market.volume_min)throw Error(`Minimum ${market.volume_min} lots risks ${loss.toFixed(2)} ${basis.currency}; 2% budget is ${budget.toFixed(2)} ${basis.currency}.`);
+          sizing={auto_volume:volume,risk_budget:budget,modeled_risk:loss*volume/sample.volume};
+        }
+        const result=await call('terminal/estimate',{...sample,volume:sizing.auto_volume||sample.volume});if(version!==ticketEstimateVersion)return;
         if(JSON.stringify([result.server,result.account])!==scope)throw Error('Account changed. Reconnect MT5.');
-        ticketEstimate={...result,key:sampleKey};ticketEstimateAt=Date.now();ticketEstimatePending=false;
+        ticketEstimate={...result,...sizing,key:sampleKey};ticketEstimateAt=Date.now();ticketEstimatePending=false;ticketEstimateError='';
+        if(sizing.auto_volume&&sampleKey===ticketEstimateKey&&Number(el('volume').value)!==sizing.auto_volume){el('volume').value=sizing.auto_volume;invalidate(false);}
       }catch(error){if(version!==ticketEstimateVersion)return;ticketEstimatePending=false;ticketEstimateAt=Date.now();ticketEstimateError=error.message;}
-      renderTicketEstimate();renderTicketHandles(chart.paneSize(0));primitive?.update();
+      renderTicketEstimate();renderTicketHandles(chart.paneSize(0));primitive?.update();updateTicket();
       if(sampleKey!==ticketEstimateKey){ticketEstimateAt=0;queueTicketEstimate();}
     },orderDrag?100:250);
   }
@@ -482,7 +511,7 @@
     lastChartKey=workspaceKey();updateOrderHint();syncDraftLines();updateSelectionPrices();primitive.update();el('chart-empty').hidden=true;
   }
   function setTool(value){finishDrawingDrag(true);selectDrawing(-1);tool=value;pending=null;document.querySelectorAll('[data-drawing]').forEach(b=>{b.classList.toggle('selected',b.dataset.drawing===value);b.setAttribute('aria-pressed',String(b.dataset.drawing===value));});chart?.applyOptions({handleScroll:value==='cursor',handleScale:{axisPressedMouseMove:true,mouseWheel:value==='cursor',pinch:value==='cursor'}});el('chart').style.cursor=value==='cursor'?'crosshair':'copy';el('tool-hint').textContent=value==='cursor'?'Scroll to zoom · click drawings to select · drag empty space to pan':value==='level'?'Click anywhere in the price pane to place a level':isPosition({type:value})?'Click to place entry · drag entry, target, stop or width handles':'Click two anchors · Escape cancels';primitive?.update();}
-  function clearMarket(){finishOrderDrag(true);if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;queueTicketEstimate();bars=[];renderTicketHandles(chart.paneSize(0));renderBrokerHandles(chart.paneSize(0));lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
+  function clearMarket(){stopConditions('Stopped: connection or chart selection changed.');finishOrderDrag(true);if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;queueTicketEstimate();bars=[];renderTicketHandles(chart.paneSize(0));renderBrokerHandles(chart.paneSize(0));lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
   function selectionChanged(){revision++;clearMarket();setTool('cursor');persist();renderWatchlist();refresh();}
   function chooseSymbol(symbol){if(!symbols.includes(symbol))return;el('symbol').value=symbol;el('search').value='';el('search-results').hidden=true;selectionChanged();}
   function renderWatchlist(){
@@ -534,9 +563,10 @@
       el('orders').replaceChildren(...(orders.length?orders.map(order=>{const row=document.createElement('tr');for(const value of [order.ticket,order.symbol,orderNames[order.type]||order.type,order.volume,order.price,order.sl||'—',order.tp||'—'])row.append(text('td',value));const cell=document.createElement('td'),button=text('button','Cancel','terminal-cancel-action');button.type='button';button.dataset.order=order.ticket;button.disabled=!next.demo||closing||closeLoading||submitting;button.onclick=()=>reviewCancel(order);const edit=text('button','Edit');edit.type='button';edit.dataset.editOrder=order.ticket;edit.disabled=!next.demo||order.symbol!==el('symbol').value||![2,3,4,5].includes(order.type)||submitting||closing;edit.onclick=()=>beginOrderEdit(order);cell.append(edit,button);row.append(cell);return row;}):[(()=>{const row=document.createElement('tr'),cell=text('td','No pending orders.');cell.colSpan=8;row.append(cell);return row;})()]));
       if(tradeTab==='closed'&&(closedScope!==scope||Date.now()-closedAt>15000))loadClosed();
       updateTicket();renderMarket();status(stale?'Market is quiet or closed. Showing the latest available broker candles.':`${symbol} · ${bars.length} broker candles · ${next.interval_note||'Drawings and layouts save locally'}`);
+      await checkConditions(next,version);
       const quoteSymbols=[...new Set([...state.watch,...state.alerts.filter(a=>!a.fired).map(a=>a.symbol)])];
       if(quoteSymbols.length){try{const result=await call('terminal/quotes',{symbols:quoteSymbols});if(version===revision){if(JSON.stringify([result.server,result.account])!==scope)throw Error('Account changed. Reconnect MT5.');quotes=result.quotes;renderWatchlist();checkAlerts();}}catch(error){if(version===revision)status('Chart loaded; watchlist quotes unavailable: '+error.message);}}
-    }catch(error){if(version===revision){el('feed').textContent='Disconnected';el('feed').classList.remove('online');status(error.message);running=false;nextAutoConnect=Date.now()+10000;market=null;invalidate();}}
+    }catch(error){if(version===revision){el('feed').textContent='Disconnected';el('feed').classList.remove('online');status(error.message);stopConditions('Stopped: market connection lost.');running=false;nextAutoConnect=Date.now()+10000;market=null;invalidate();}}
     finally{loading=false;if(version!==revision)refresh();}
   }
   async function loadClosed(){
@@ -655,9 +685,115 @@
   },true);
   el('chart').addEventListener('pointerup',event=>{if(orderDrag){event.preventDefault();event.stopImmediatePropagation();finishOrderDrag();return;}if(!drawingDrag)return;event.preventDefault();event.stopImmediatePropagation();finishDrawingDrag();},true);
   el('chart').addEventListener('pointercancel',()=>{finishOrderDrag(true);finishDrawingDrag(true);},true);
+  const C=window.TerminalConditions;
+  let conditionRun=null,conditionBusy=false,conditionDraftScope='';
+  const conditionMessage=message=>{el('condition-status').textContent=message;};
+  const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
+  function stopConditions(message){conditionRun=null;if(el('condition-status'))conditionMessage(message);}
+  function conditionRows(){return [...el('condition-list').children].map(row=>Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high'].includes(input.dataset.field)?Number(input.value):input.value])));}
+  function saveConditions(){try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value}));}catch(_){conditionMessage('Cannot save condition draft locally.');}}
+  function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
+    const row=text('div','','terminal-condition-row');
+    const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);row.append(label);return input;};
+    const rule=add('Rule','rule',Object.entries(C.rules)),mode=add('Evaluate','mode',[['LIVE','Live Bid'],['CANDLE','Completed candle']]),tf=add('Timeframe','timeframe',C.frames.map(f=>[f,f]));
+    const level=add('Price level','level'),low=add('Zone low','low'),high=add('Zone high','high');
+    const update=()=>{if(C.candleOnly(rule.value))mode.value='CANDLE';mode.disabled=C.candleOnly(rule.value);tf.parentNode.hidden=mode.value==='LIVE';level.parentNode.hidden=C.zone(rule.value);low.parentNode.hidden=high.parentNode.hidden=!C.zone(rule.value);saveConditions();};
+    row.onchange=update;
+    for(const [label,action] of [['↑',()=>{if(row.previousElementSibling)row.before(row.previousElementSibling);}],['↓',()=>{if(row.nextElementSibling)row.after(row.nextElementSibling);}],['Remove',()=>row.remove()]]){const button=text('button',label);button.type='button';button.setAttribute('aria-label',label==='↑'?'Move condition up':label==='↓'?'Move condition down':'Remove condition');button.onclick=()=>{action();saveConditions();};row.append(button);}
+    el('condition-list').append(row);update();return row;
+  }
+  function restoreConditions(){
+    const key=conditionStorage();if(conditionDraftScope===key)return;conditionDraftScope=key;stopConditions('Stopped. Review the restored draft and start when ready.');
+    let value={};try{value=JSON.parse(localStorage.getItem(key)||'{}');}catch(_){}
+    el('condition-list').replaceChildren();el('condition-action').value='ALERT';
+    el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';
+    for(const name of ['timeout','gap'])el('condition-'+name).value=Number.isFinite(Number(value[name]))&&Number(value[name])>=0?value[name]:(name==='gap'?300:0);
+    if(Array.isArray(value.rows))for(const row of value.rows)if(row&&typeof row==='object')conditionRow(row);
+  }
+  el('condition-add').onclick=()=>{restoreConditions();conditionRow();};
+  for(const name of ['sizing','timeout','gap'])el('condition-'+name).addEventListener('change',saveConditions);
+  el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;updateOrderKind();});
+  el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic demo entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';if(conditionRun)stopConditions('Stopped: entry mode changed. Start to apply your draft.');};
+  el('conditions-panel').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT')event.preventDefault();});
+  el('condition-stop').onclick=()=>stopConditions('Stopped. No future condition order will be sent. Check MT5 for any request already submitted.');
+  const conditionContextValid=run=>conditionRun===run&&run.scope===scope&&run.symbol===el('symbol').value&&!document.hidden&&!el('pane').hidden;
+  async function conditionComplete(run){
+    if(!conditionContextValid(run)||run.attempted)return;run.attempted=true;
+    conditionMessage('All conditions passed.');
+    if(run.action==='ALERT'){conditionRun=null;return;}
+    conditionBusy=true;
+    try{
+      if(submitting||reviewing||closing||editingOrder||editingPosition)throw Error('Ticket is busy. No entry attempted.');
+      const next=await call('terminal/market',{symbol:run.symbol,timeframe:'M1'});
+      if(!conditionContextValid(run))return;
+      if(JSON.stringify([next.server,next.account])!==run.scope)throw Error('Account changed.');
+      if(!next.demo)throw Error('Condition execution is demo-account only.');
+      const body={...run.ticket,condition_entry:true,condition_risk_auto:run.sizing==='AUTO',expected_account:next.account,expected_server:next.server};
+      if(run.sizing==='AUTO'){
+        const entry=body.order_kind==='MARKET'?(body.side==='BUY'?next.ask:next.bid):Number(body.price);
+        const adverse=entry+(body.side==='BUY'?1:-1)*20*(next.point||next.tick_size);
+        const estimate=await call('terminal/plan',{symbol:run.symbol,side:body.side,entry:adverse,stop:Number(body.sl),target:Number(body.tp),volume:next.volume_min});
+        if(!conditionContextValid(run))return;
+        if(JSON.stringify([estimate.server,estimate.account])!==run.scope||!Number.isFinite(estimate.risk)||estimate.risk<=0)throw Error('Risk estimate unavailable.');
+        const raw=Math.min(next.volume_max,next.equity*.02/estimate.risk*next.volume_min);
+        body.volume=Number((Math.floor(raw/next.volume_step)*next.volume_step).toFixed(8));
+        if(body.volume<next.volume_min)throw Error('Minimum lot exceeds the 2% risk budget.');
+      }
+      const result=await call('terminal/preview',body);
+      if(!conditionContextValid(run))return;
+      if(JSON.stringify([result.server,result.account])!==run.scope)throw Error('Account changed during review.');
+      if(run.action==='REVIEW'){
+        invalidate();preview=result.preview;
+        el('order-summary').textContent=`CONDITIONS COMPLETE · DEMO ${result.account} / ${result.server} · ${body.side} ${result.order_kind} · ${result.request.volume} lots ${body.symbol} at ${result.request.price} · SL ${result.request.sl} · TP ${result.request.tp}. Frozen settings from Start; confirm below.`;
+        el('submit').hidden=false;expiryTimer=setTimeout(()=>{if(preview===result.preview){invalidate(false);el('order-summary').append(text('p','Condition review expired. Start again.'));}},result.expires_in*1000);
+        conditionRun=null;conditionMessage('Finished. Confirm the prepared order in the ticket.');return;
+      }
+      // Consume this arm before the only send. Unknown outcomes are never retried.
+      conditionRun=null;submitting=true;invalidate();updateTicket();
+      const sent=await call('terminal/submit',{preview:result.preview});
+      conditionMessage(`Finished · broker ${sent.retcode}: ${sent.comment}. Order ${sent.order}, deal ${sent.deal}. Check MT5 for final status.`);
+    }catch(error){conditionRun=null;conditionMessage(`Stopped: ${error.message} No automatic retry. Check MT5 before rearming.`);}
+    finally{conditionBusy=false;submitting=false;updateTicket();}
+  }
+  el('condition-start').onclick=async()=>{
+    if(conditionBusy||submitting||reviewing||closing)return;
+    try{
+      if(!market||document.hidden||el('pane').hidden)throw Error('Connect and open Terminal first.');
+      const rows=C.validate(conditionRows()),action=el('condition-action').value;
+      const timeout=Number(el('condition-timeout').value)*60,gap=Number(el('condition-gap').value);
+      if(!Number.isFinite(timeout)||!Number.isFinite(gap)||timeout<0||gap<0)throw Error('Timeout and quote gap must be nonnegative.');
+      if(action!=='ALERT'&&(!market.demo||editingOrder||editingPosition))throw Error('Use a new demo order ticket for condition entries.');
+      const ticket={symbol:el('symbol').value,side:el('side').value,order_kind:el('order-kind').value,price:el('order-price').value,volume:el('volume').value,sl:el('sl').value,tp:el('tp').value};
+      if(action!=='ALERT'&&(!(Number(ticket.sl)>0)||!(Number(ticket.tp)>0)))throw Error('Enter SL and TP in the order ticket first.');
+      stopConditions('');saveConditions();invalidate();
+      conditionRun={scope,symbol:ticket.symbol,action,ticket,sizing:el('condition-sizing').value,sequence:new C.Sequence(rows,{timeout,gap}),attempted:false};
+      conditionMessage(`${action==='AUTO'?'DEMO ORDER ARMED':action==='REVIEW'?'Review preparation running':'Alerts running'} · step ${rows.length?1:0} of ${rows.length}. Draft edits require Start again.`);
+      if(!rows.length)await conditionComplete(conditionRun);
+    }catch(error){conditionMessage(error.message);}
+  };
+  async function checkConditions(next,version){
+    restoreConditions();const run=conditionRun;if(!run||run.attempted||conditionBusy)return;
+    if(!conditionContextValid(run)){stopConditions('Stopped: monitoring context changed.');return;}
+    const now=Date.now()/1000;if(next.quote_time<now-30||next.quote_time>now+5){stopConditions('Stopped: quote is stale.');return;}
+    const step=run.sequence.rows[run.sequence.index];let candles=[];
+    if(step?.mode==='CANDLE'){
+      try{
+        const data=step.timeframe===el('timeframe').value?next:await call('terminal/market',{symbol:run.symbol,timeframe:step.timeframe});
+        if(!conditionContextValid(run)||version!==revision)return;
+        if(JSON.stringify([data.server,data.account])!==run.scope)throw Error('Account changed.');
+        // The final bar is forming; only prior bars can satisfy candle rules.
+        candles=data.bars.slice(0,-1).map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4]}));
+        if(candles.length<2)throw Error('Not enough completed candles.');
+      }catch(error){stopConditions('Stopped: '+error.message);return;}
+    }
+    if(run.sequence.observe({bid:next.bid,time:next.quote_time,candles}))await conditionComplete(run);
+    else conditionMessage(`${run.action==='AUTO'?'DEMO ORDER ARMED':'Monitoring'} · step ${run.sequence.index+1} of ${run.sequence.rows.length}. Draft edits require Start again.`);
+  }
+
   buildChart();setTool('cursor');
   new MutationObserver(()=>{if(!el('pane').hidden){if(!running)connectWorkspace(true);else refresh();}}).observe(el('pane'),{attributes:true,attributeFilter:['hidden']});
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)stopConditions('Stopped: browser is hidden. Start again when ready.');else refresh();});
+  new MutationObserver(()=>{if(el('pane').hidden)stopConditions('Stopped: Terminal is hidden.');}).observe(el('pane'),{attributes:true,attributeFilter:['hidden']});
   window.addEventListener('DOMContentLoaded',()=>connectWorkspace(true));
   setInterval(()=>{if(!running&&!connecting&&!autoReconnectBlocked&&!document.hidden&&!el('pane').hidden&&Date.now()>=nextAutoConnect)connectWorkspace(true);else refresh();},2000);
 })();

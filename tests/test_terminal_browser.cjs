@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const {spawn}=require('node:child_process');
 const playwright=require('playwright');
 const root=path.resolve(__dirname,'..'),port=18876,url=`http://127.0.0.1:${port}`;
-const server=spawn(path.join(root,'.venv/Scripts/python.exe'),['server.py','--port',String(port),'--no-browser'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});
+const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scripts/python.exe'),['server.py','--port',String(port),'--no-browser'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});
 const candles=Array.from({length:300},(_,i)=>[Date.UTC(2026,9,20)/1+300000*i,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100+i]);
 const hourlyCandles=candles.map((bar,i)=>[Math.floor(candles.at(-1)[0]/3600000)*3600000-(299-i)*3600000,...bar.slice(1)]);
 let browser;

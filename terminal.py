@@ -10,6 +10,7 @@ class Terminal:
     def __init__(self, bridge):
         self.bridge = bridge
         self.previews = {}
+        self.condition_attempts = {}
 
     def connection(self, trading=False):
         self.bridge.check()
@@ -81,7 +82,7 @@ class Terminal:
         fields = ('ticket', 'symbol', 'type', 'volume', 'price_open', 'price_current', 'sl', 'tp', 'profit')
         return dict(bars=bars, interval_note=note,
                     bid=tick.bid, ask=tick.ask, quote_time=tick.time, digits=info.digits,
-                    tick_size=info.trade_tick_size,stops_distance=info.trade_stops_level*info.point,
+                    tick_size=info.trade_tick_size,point=info.point,stops_distance=info.trade_stops_level*info.point,
                     volume_min=info.volume_min, volume_max=info.volume_max, volume_step=info.volume_step,
                     balance=account.balance, equity=account.equity, margin_free=account.margin_free,
                     currency=account.currency, account=str(account.login), server=account.server,
@@ -206,6 +207,21 @@ class Terminal:
         if pending_order is not None:
             request=dict(action=mt.TRADE_ACTION_MODIFY,order=pending_order.ticket,symbol=symbol,price=price,sl=sl,tp=tp,
                          type_time=pending_order.type_time,expiration=pending_order.time_expiration)
+        if body.get('condition_entry'):
+            if (str(account.login), account.server) != (str(body.get('expected_account')), body.get('expected_server')):
+                raise ValueError('Condition account changed. Start again.')
+            if not sl or not tp:
+                raise ValueError('Condition entries require SL and TP.')
+            positions, orders = mt.positions_get(symbol=symbol), mt.orders_get(symbol=symbol)
+            if positions is None or orders is None:
+                raise ValueError('Cannot verify symbol exposure.')
+            if positions or orders:
+                raise ValueError('Existing position or pending order blocks condition entry.')
+            if body.get('condition_risk_auto'):
+                adverse = price + (1 if side == 'BUY' else -1) * 20 * info.point
+                loss = mt.order_calc_profit(mt.ORDER_TYPE_BUY if side == 'BUY' else mt.ORDER_TYPE_SELL, symbol, volume, adverse, sl)
+                if loss is None or not math.isfinite(loss) or not math.isfinite(account.equity) or account.equity <= 0 or abs(loss) > account.equity * .02:
+                    raise ValueError('Current modeled loss exceeds 2% equity or is unavailable. Start again to resize.')
         checked = mt.order_check(request)
         if checked is None or checked.retcode != 0:
             raise ValueError('Broker order check failed: ' + (checked.comment if checked else str(mt.last_error())))
@@ -334,6 +350,12 @@ class Terminal:
         closing=preview['body'].get('operation')=='close'
         if closing and any(request.get(field)!=preview['request'].get(field) for field in ('position','symbol','type','volume')):
             raise ValueError('Position changed since review. Review the remaining position again.')
+        if preview['body'].get('condition_entry'):
+            key = (account.login, account.server, request['symbol'])
+            now = time.monotonic()
+            if now - self.condition_attempts.get(key, -float('inf')) < 60:
+                raise ValueError('A condition entry was attempted for this symbol in the last 60 seconds. Check MT5.')
+            self.condition_attempts[key] = now
         result = self.bridge.mt.order_send(request)
         if result is None:
             raise ValueError('Execution outcome unknown. Check MT5 positions and history before placing another order.')

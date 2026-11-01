@@ -90,3 +90,5 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 }
 
 @media(max-width:800px){#terminal-pane.watch-collapsed .terminal-shell,#terminal-pane.ticket-collapsed .terminal-shell,#terminal-pane.watch-collapsed.ticket-collapsed .terminal-shell{grid-template-columns:minmax(0,1fr)}#terminal-pane[class] .terminal-watch,#terminal-pane[class] #terminal-ticket{visibility:visible;padding:14px}}
+
+.terminal-conditions {border-top:1px solid var(--border,#334155);padding-top:12px;margin-top:12px}.terminal-conditions summary{cursor:pointer;font-weight:600}.terminal-condition-row{border:1px solid #334155;border-radius:6px;padding:8px;margin:8px 0}.terminal-condition-row label{display:block;margin:5px 0}.terminal-condition-row button{margin-right:4px}.terminal-condition-row select,.terminal-condition-row input{width:100%;box-sizing:border-box}.terminal-condition-row.active{border-color:#e4bd70}

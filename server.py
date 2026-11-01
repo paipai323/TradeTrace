@@ -23,7 +23,7 @@ VERSION = '1.18.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/terminal-conditions.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -68,6 +68,7 @@ class Handler(BaseHTTPRequestHandler):
         routes['/favicon.svg'] = ('favicon.svg', 'image/svg+xml')
         routes['/journal.js'] = ('journal.js', 'text/javascript')
         routes['/journal.css'] = ('journal.css', 'text/css')
+        routes['/terminal-conditions.js'] = ('terminal-conditions.js', 'text/javascript')
         routes['/terminal.js'] = ('terminal.js', 'text/javascript')
         routes['/terminal.css'] = ('terminal.css', 'text/css')
         routes['/terminal-analysis.js'] = ('terminal-analysis.js', 'text/javascript')
