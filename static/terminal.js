@@ -721,7 +721,7 @@
     const rule=add('Rule','rule',Object.entries(C.rules)),mode=add('Evaluate','mode',[['LIVE','Live Bid'],['CANDLE','Completed candle']]),tf=add('Timeframe','timeframe',C.frames.map(f=>[f,f]));
     const level=add('Price level','level'),low=add('Zone low','low'),high=add('Zone high','high');
     const update=()=>{conditionPick=null;if(C.candleOnly(rule.value))mode.value='CANDLE';mode.disabled=C.candleOnly(rule.value);tf.parentNode.hidden=mode.value==='LIVE';level.parentNode.hidden=C.zone(rule.value);low.parentNode.hidden=high.parentNode.hidden=!C.zone(rule.value);saveConditions();};
-    row.onchange=update;row.oninput=()=>{saveConditions();};
+    row.onchange=event=>{if(event.target===rule){if(C.zone(rule.value))seedConditionZone(row);else seedConditionLevel(row);}update();};row.oninput=()=>{saveConditions();};
     for(const [label,action] of [['↑',()=>{if(row.previousElementSibling)row.before(row.previousElementSibling);}],['↓',()=>{if(row.nextElementSibling)row.after(row.nextElementSibling);}],['Remove',()=>row.remove()]]){const button=text('button',label);button.type='button';button.setAttribute('aria-label',label==='↑'?'Move condition up':label==='↓'?'Move condition down':'Remove condition');button.onclick=()=>{action();saveConditions();};editor.append(button);}
     el('condition-list').append(row);selectCondition(row);update();return row;
   }
@@ -739,7 +739,7 @@
     if(Array.isArray(value.rows))for(const row of value.rows)if(row&&typeof row==='object')conditionRow(row);
   }
   for(const id of ['condition-show-levels','condition-show-zones'])el(id).onchange=()=>{finishConditionDrag(true);conditionPick=null;saveConditions();};
-  el('condition-add').onclick=()=>{restoreConditions();conditionRow();};
+  el('condition-add').onclick=()=>{restoreConditions();const row=conditionRow();seedConditionLevel(row);saveConditions();};
   for(const name of ['sizing','timeout','gap'])el('condition-'+name).addEventListener('change',saveConditions);
   el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;invalidate();syncDraftLines();});
   el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic demo entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';if(conditionRun)stopConditions('Stopped: entry mode changed. Start to apply your draft.');};
@@ -825,6 +825,35 @@
   let selectedConditionRow=null,conditionPick=null;
   const conditionHandleNodes=new Map();
   const conditionInput=(row,field)=>row.querySelector(`[data-field="${field}"]`);
+  function seedConditionLevel(row){
+    if(!market||!main)return;
+    const input=conditionInput(row,'level');if(Number(input.value)>0)return;
+    const size=chart.paneSize(0),p1=main.coordinateToPrice(0),p2=main.coordinateToPrice(size.height);
+    const top=Math.max(p1,p2),bottom=Math.min(p1,p2),margin=(top-bottom)*.05;
+    const inside=value=>Number.isFinite(value)&&value>0&&value>=bottom+margin&&value<=top-margin;
+    const low=Number(conditionInput(row,'low').value),high=Number(conditionInput(row,'high').value),middle=(low+high)/2;
+    const center=low>0&&high>low&&inside(middle)?middle:inside(market.bid)?market.bid:Number.isFinite(top+bottom)&&top>bottom?(top+bottom)/2:market.bid;
+    const price=planPrice(center);if(price>0)input.value=price.toFixed(market.digits);
+  }
+  function seedConditionZone(row){
+    if(!market||!main)return;
+    const lowInput=conditionInput(row,'low'),highInput=conditionInput(row,'high');
+    let low=Number(lowInput.value),high=Number(highInput.value);
+    if(low>0&&high>0)return;
+    const tick=market.tick_size||10**-market.digits,size=chart.paneSize(0);
+    const p1=main.coordinateToPrice(0),p2=main.coordinateToPrice(size.height);
+    const top=Math.max(p1,p2),bottom=Math.min(p1,p2);
+    const span=Number.isFinite(top-bottom)&&top>bottom?top-bottom:Math.max(Math.abs(market.ask-market.bid)*4,tick*20);
+    const half=Math.max(tick*2,span*.06);
+    if(low>0)high=planPrice(low+half*2);
+    else if(high>0)low=planPrice(Math.max(tick,high-half*2));
+    else{
+      const level=Number(conditionInput(row,'level').value),inside=value=>Number.isFinite(value)&&value>=bottom+half&&value<=top-half;
+      const center=inside(level)?level:inside(market.bid)?market.bid:Number.isFinite(top+bottom)&&top>bottom?(top+bottom)/2:market.bid;
+      low=planPrice(Math.max(tick,center-half));high=planPrice(center+half);
+    }
+    if(low>0&&high>low){lowInput.value=low.toFixed(market.digits);highInput.value=high.toFixed(market.digits);}
+  }
   function selectCondition(row){
     selectedConditionRow=row;
     for(const item of el('condition-list').children){item.classList.toggle('active',item===row);item.querySelector('.terminal-condition-editor').hidden=item!==row;item.querySelector('.terminal-condition-summary').setAttribute('aria-expanded',String(item===row));}
