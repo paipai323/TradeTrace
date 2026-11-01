@@ -55,3 +55,38 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open .connection{marg
 
 @media(min-width:1201px){.terminal-center>.terminal-chart-area{flex-basis:650px;min-height:650px}}@media(min-width:951px) and (max-width:1200px){.terminal-center>.terminal-chart-area{flex-basis:600px;min-height:600px}}
 .terminal-trade-tabs{display:flex;gap:18px;align-items:center}.terminal-trade-tabs button{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;padding:10px 3px!important;color:#8d9fb8}.terminal-trade-tabs button[aria-selected=true]{color:#7ee3c6;border-bottom-color:#7ee3c6}.terminal-trade-tabs span{margin-left:6px;font-size:10px;color:#8d9fb8}.terminal-trade-panel{min-height:185px}.terminal-trade-panel>.terminal-panel-title{border-bottom:1px solid #263348}.terminal-trade-panel .terminal-table{max-height:300px;overflow:auto}.terminal-trade-panel th{white-space:nowrap}.terminal-trade-panel td{white-space:nowrap}
+
+/* A viewport-sized terminal; overflow belongs to the individual panels. */
+body:has(#terminal-pane:not([hidden])){height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
+body:has(#terminal-pane:not([hidden]))>header{flex:none}
+body:has(#terminal-pane:not([hidden])) main{flex:1;min-height:0;padding:8px;display:flex;flex-direction:column;overflow:hidden}
+#terminal-pane:not([hidden]){flex:1;min-height:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) 6px var(--activity-height,170px);overflow:hidden}
+.terminal-top{flex-wrap:nowrap}.terminal-top h2{white-space:nowrap}.terminal-actions{justify-content:flex-end}
+#terminal-status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:6px}
+.terminal-toolbar{flex-wrap:wrap;padding:7px 10px;gap:8px}
+.terminal-shell{position:relative;min-height:0;overflow:hidden;grid-template-columns:var(--watch-width,190px) 6px minmax(100px,1fr) 6px var(--ticket-width,260px)}
+.terminal-watch,#terminal-ticket{min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#41536d transparent;grid-column:auto;border:0}
+.terminal-center{min-height:0;overflow:hidden}.terminal-center>.terminal-chart-area{flex:1 1 0!important;min-height:80px!important;height:auto!important}
+.terminal-chart-heading{padding:8px 12px;min-height:0}.terminal-chart-heading #terminal-indicator-values{height:20px}.terminal-drawing-tools{padding:4px 8px}.terminal-drawing-tools button{padding:6px 8px!important}
+.terminal-chart-footer{padding:6px 12px;white-space:nowrap;flex-wrap:nowrap;overflow:hidden}.terminal-chart-footer>span:first-child{overflow:hidden;text-overflow:ellipsis}.terminal-attribution{padding:0 12px 5px}
+.terminal-selection-values{max-height:60px;overflow:auto}.terminal-position-plan{max-height:45%;overflow:auto}
+.terminal-trade-panel{min-height:0;padding:0 12px 8px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;border-radius:0 0 6px 6px}.terminal-trade-panel>.terminal-panel-title{position:sticky;top:0;background:#101925;z-index:2;padding:2px 0}.terminal-trade-panel .terminal-table{max-height:none;margin-top:5px}.terminal-trade-panel td,.terminal-trade-panel th{padding:8px 10px}
+.terminal-resizer{background:#182638;touch-action:none;position:relative;z-index:8;outline-offset:-2px}.terminal-resizer:hover,.terminal-resizer:focus-visible,.terminal-resizer.is-resizing{background:#4caa96}.terminal-resizer-vertical{cursor:col-resize}.terminal-resizer-horizontal{cursor:row-resize}.terminal-resizer-horizontal:after{content:'';position:absolute;left:calc(50% - 18px);top:2px;width:36px;height:2px;background:#72849c;border-radius:2px}
+body.terminal-resizing{user-select:none}body.terminal-resizing *{cursor:inherit!important}
+#terminal-pane.watch-collapsed .terminal-shell{grid-template-columns:0 0 minmax(100px,1fr) 6px var(--ticket-width,260px)}
+#terminal-pane.ticket-collapsed .terminal-shell{grid-template-columns:var(--watch-width,190px) 6px minmax(100px,1fr) 0 0}
+#terminal-pane.watch-collapsed.ticket-collapsed .terminal-shell{grid-template-columns:0 0 minmax(100px,1fr) 0 0}
+#terminal-pane.watch-collapsed .terminal-watch,#terminal-pane.watch-collapsed #terminal-resize-watch,#terminal-pane.ticket-collapsed #terminal-ticket,#terminal-pane.ticket-collapsed #terminal-resize-ticket{visibility:hidden;padding:0}
+body:has(#terminal-pane:not([hidden])) .checks,body:has(#terminal-pane:not([hidden])) main>#status{display:none}
+body:has(#terminal-pane:not([hidden])).terminal-connection-open .connection{position:fixed;top:74px;left:16px;width:min(640px,calc(100vw - 32px));max-height:70vh;overflow:auto;z-index:50;box-shadow:0 15px 60px #0009;align-items:start}
+body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{display:block;position:fixed;bottom:16px;left:16px;width:min(640px,calc(100vw - 32px));padding:12px;background:#162334;border:1px solid #33435b;z-index:51}
+@media(max-width:800px){
+  .terminal-top{align-items:start}.terminal-top h2{font-size:16px}.terminal-actions{gap:4px}#terminal-pane .terminal-actions button{padding:6px;font-size:10px}.terminal-chip{padding:4px;font-size:9px}.terminal-beta{display:none}#terminal-journal{display:none}
+  #terminal-pane .terminal-shell{display:grid;grid-template-columns:minmax(0,1fr)}.terminal-center{grid-column:1;grid-row:1}
+  #terminal-pane .terminal-watch,#terminal-pane #terminal-ticket{display:none;position:absolute;top:0;bottom:0;z-index:12;width:min(300px,85%);padding:14px;background:#101925;visibility:visible;box-shadow:0 0 25px #0009}
+  #terminal-pane .terminal-watch{left:0}#terminal-pane #terminal-ticket{right:0}
+  #terminal-pane.mobile-watch-open .terminal-watch,#terminal-pane.mobile-ticket-open #terminal-ticket{display:block}
+  .terminal-resizer-vertical{display:none}.terminal-toolbar{gap:4px;padding:5px}.terminal-chart-footer{font-size:8px}.terminal-chart-footer #terminal-quote-time{display:none}
+}
+
+@media(max-width:800px){#terminal-pane.watch-collapsed .terminal-shell,#terminal-pane.ticket-collapsed .terminal-shell,#terminal-pane.watch-collapsed.ticket-collapsed .terminal-shell{grid-template-columns:minmax(0,1fr)}#terminal-pane[class] .terminal-watch,#terminal-pane[class] #terminal-ticket{visibility:visible;padding:14px}}

@@ -68,16 +68,33 @@ let browser;
     return {bottomGap:center.bottom-attribution.bottom,areaHeight:area.height,chartHeight:chart.height};
   });
   assert.ok(fill.bottomGap<=2,'chart column has no unused space below its footer');
-  assert.ok(fill.areaHeight>570,'desktop graph grows to use the order ticket height');
+  assert.ok(fill.areaHeight>150,'chart retains usable space within the viewport');
   assert.ok(Math.abs(fill.areaHeight-fill.chartHeight)<2,'native chart fills the expanded area');
   await page.locator('.terminal-center').screenshot({path:path.join(root,'work/terminal-expanded-chart.png')});
-  // Keep absolute-coordinate drawing tests independent of ticket/plan height.
-  // The real stretch layout is asserted and captured above; mobile remains unchanged.
-  const fixedDesktopPlot='@media(min-width:951px){.terminal-center>.terminal-chart-area{flex:0 0 570px;min-height:570px;height:570px}}';
-  await page.route('**/terminal.css',route=>route.fulfill({contentType:'text/css',body:fs.readFileSync(path.join(root,'static/terminal.css'),'utf8')+'\n'+fixedDesktopPlot}));
-  await page.evaluate(rule=>{const sheet=Array.from(document.styleSheets).find(sheet=>sheet.href?.endsWith('/terminal.css'));sheet.insertRule(rule,sheet.cssRules.length);},fixedDesktopPlot);
+  const viewportFit=()=>page.evaluate(()=>({height:innerHeight,scrollHeight:document.documentElement.scrollHeight,width:innerWidth,scrollWidth:document.documentElement.scrollWidth}));
+  let fitted=await viewportFit();assert.ok(fitted.scrollHeight<=fitted.height+1&&fitted.scrollWidth<=fitted.width+1,'terminal never scrolls the browser page');
+  const paneWidth=selector=>page.locator(selector).evaluate(node=>node.getBoundingClientRect().width);
+  const resizePanel=async(name,dx,dy)=>{const r=await page.locator('#terminal-resize-'+name).boundingBox();await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();await page.mouse.move(r.x+r.width/2+dx,r.y+r.height/2+dy,{steps:5});await page.mouse.up();};
+  const beforeWatch=await paneWidth('.terminal-watch');await resizePanel('watch',40,0);assert.ok(await paneWidth('.terminal-watch')>beforeWatch+30,'watchlist divider resizes the panel');
+  const beforeTicket=await paneWidth('#terminal-ticket');await resizePanel('ticket',-40,0);assert.ok(await paneWidth('#terminal-ticket')>beforeTicket+30,'order ticket divider resizes the panel');
+  const activityBefore=await page.locator('.terminal-trade-panel').evaluate(node=>node.clientHeight);await resizePanel('activity',0,-35);assert.ok(await page.locator('.terminal-trade-panel').evaluate(node=>node.clientHeight)>activityBefore+25,'activity divider adjusts panel height');
+  const panelSaved=await page.evaluate(()=>JSON.parse(localStorage.getItem('tradetrace.terminal.v2')).panelSizes);assert.ok(panelSaved.watch>190&&panelSaved.ticket>260,'panel dimensions save locally');
+  await page.locator('#terminal-resize-activity').press('ArrowUp');assert.ok(Number(await page.locator('#terminal-resize-activity').getAttribute('aria-valuenow'))>activityBefore+35,'separators support keyboard resizing');
+  await page.locator('#terminal-toggle-watch').click();assert.equal(await page.locator('#terminal-toggle-watch').getAttribute('aria-expanded'),'false');await page.locator('#terminal-toggle-watch').click();
+  await page.setViewportSize({width:600,height:900});await page.waitForTimeout(150);fitted=await viewportFit();assert.ok(fitted.scrollHeight<=fitted.height+1&&fitted.scrollWidth<=fitted.width+1,'compact terminal also fits the viewport');
+  await page.locator('#terminal-toggle-ticket').click();assert.equal(await page.locator('#terminal-ticket').isVisible(),true,'compact order ticket opens as a panel');
+  await page.locator('#terminal-ticket').evaluate(node=>{node.scrollTop=node.scrollHeight;});assert.ok(await page.locator('#terminal-ticket').evaluate(node=>node.scrollTop)>0,'ticket scrolls internally to its lower controls');
+  await page.locator('#terminal-toggle-ticket').click();await page.locator('#terminal-toggle-watch').click();assert.equal(await page.locator('.terminal-watch').isVisible(),true,'compact watchlist opens as a panel');await page.locator('#terminal-toggle-watch').click();
+  await page.setViewportSize({width:1536,height:1100});await page.waitForTimeout(150);
+  assert.ok(Math.abs(await paneWidth('.terminal-watch')-panelSaved.watch)<=1,'desktop watchlist size survives compact-window use');
+  assert.ok(Math.abs(await paneWidth('#terminal-ticket')-panelSaved.ticket)<=1,'desktop ticket size survives compact-window use');
+  // Existing drawing regressions use the prior stable plot geometry. The real
+  // viewport layout, resize handles and compact panels are exercised above.
+  const sourceCss=fs.readFileSync(path.join(root,'static/terminal.css'),'utf8');
+  const fixedDesktopPlot=sourceCss.slice(0,sourceCss.indexOf('/* A viewport-sized terminal'))+'\n.terminal-resizer{display:none!important}@media(min-width:951px){.terminal-center>.terminal-chart-area{flex:0 0 570px;min-height:570px;height:570px}}';
+  await page.route('**/terminal.css',route=>route.fulfill({contentType:'text/css',body:fixedDesktopPlot}));
+  await page.evaluate(css=>{const source=new CSSStyleSheet();source.replaceSync(css);const sheet=Array.from(document.styleSheets).find(sheet=>sheet.href?.endsWith('/terminal.css'));while(sheet.cssRules.length)sheet.deleteRule(0);for(const rule of source.cssRules)sheet.insertRule(rule.cssText,sheet.cssRules.length);},fixedDesktopPlot);
   await page.waitForTimeout(150);
-
   await page.locator('#terminal-interval-menu>summary').click();
   await page.locator('.terminal-interval-popover').screenshot({path:path.join(root,'work/terminal-interval-menu.png')});
   await page.locator('#terminal-interval-groups [data-interval="M2"]').click();

@@ -28,6 +28,38 @@
     try{localStorage.setItem(storageKey,JSON.stringify(saved));el('save-state').textContent='Saved locally';}
     catch(_){el('save-state').textContent='Storage full or unavailable — changes are temporary';}
   }
+  const panelDefaults={watch:190,ticket:260,activity:170};
+  let panelSizes={...panelDefaults},panelDrag=null;
+  for(const name of Object.keys(panelDefaults))if(Number.isFinite(saved.panelSizes?.[name]))panelSizes[name]=saved.panelSizes[name];
+  const smallPanels=()=>matchMedia('(max-width:800px)').matches;
+  function panelLimits(name){
+    if(name==='activity')return [95,Math.max(95,Math.min(420,(el('pane').clientHeight||innerHeight-100)*.45))];
+    return name==='watch'?[130,Math.max(130,Math.min(400,innerWidth*.28))]:[210,Math.max(210,Math.min(460,innerWidth*.35))];
+  }
+  function sizePanels(){
+    for(const name of Object.keys(panelDefaults)){
+      const [min,max]=panelLimits(name),size=Math.round(Math.max(min,Math.min(max,panelSizes[name])));
+      el('pane').style.setProperty(name==='activity'?'--activity-height':`--${name}-width`,size+'px');
+      const handle=el('resize-'+name);handle.setAttribute('aria-valuemin',Math.round(min));handle.setAttribute('aria-valuemax',Math.round(max));handle.setAttribute('aria-valuenow',size);
+    }
+    for(const [name,css] of [['watch','watch'],['ticket','ticket']])el('toggle-'+name).setAttribute('aria-expanded',String(smallPanels()?el('pane').classList.contains('mobile-'+css+'-open'):!el('pane').classList.contains(css+'-collapsed')));
+  }
+  function savePanels(){saved.panelSizes={...panelSizes};saved.panelCollapsed={watch:el('pane').classList.contains('watch-collapsed'),ticket:el('pane').classList.contains('ticket-collapsed')};persist();}
+  for(const name of ['watch','ticket']){
+    el('pane').classList.toggle(name+'-collapsed',saved.panelCollapsed?.[name]===true);
+    el('toggle-'+name).onclick=()=>{const cls=smallPanels()?'mobile-'+name+'-open':name+'-collapsed';el('pane').classList.toggle(cls);if(smallPanels())el('pane').classList.remove('mobile-'+(name==='watch'?'ticket':'watch')+'-open');sizePanels();savePanels();};
+  }
+  for(const name of Object.keys(panelDefaults)){
+    const handle=el('resize-'+name);
+    handle.onpointerdown=event=>{if(event.button!==0)return;panelDrag={name,start:name==='activity'?event.clientY:event.clientX,value:Number(handle.getAttribute('aria-valuenow')),pointerId:event.pointerId};handle.setPointerCapture(event.pointerId);handle.classList.add('is-resizing');document.body.classList.add('terminal-resizing');document.body.style.cursor=name==='activity'?'row-resize':'col-resize';event.preventDefault();};
+    handle.onpointermove=event=>{if(panelDrag?.name!==name)return;const delta=(name==='activity'?event.clientY:event.clientX)-panelDrag.start;const [min,max]=panelLimits(name);panelSizes[name]=Math.max(min,Math.min(max,panelDrag.value+(name==='watch'?delta:-delta)));sizePanels();};
+    const finish=event=>{if(panelDrag?.name!==name)return;if(event.type==='pointercancel')panelSizes[name]=panelDrag.value;panelDrag=null;handle.classList.remove('is-resizing');document.body.classList.remove('terminal-resizing');document.body.style.cursor='';if(handle.hasPointerCapture(event.pointerId))handle.releasePointerCapture(event.pointerId);sizePanels();savePanels();};
+    handle.onpointerup=finish;handle.onpointercancel=finish;
+    handle.ondblclick=()=>{panelSizes[name]=panelDefaults[name];sizePanels();savePanels();};
+    handle.onkeydown=event=>{const vertical=name!=='activity';if(!(vertical?['ArrowLeft','ArrowRight','Home','End']:['ArrowUp','ArrowDown','Home','End']).includes(event.key))return;event.preventDefault();const [min,max]=panelLimits(name);panelSizes[name]=event.key==='Home'?min:event.key==='End'?max:Number(handle.getAttribute('aria-valuenow'))+((event.key==='ArrowRight'&&name==='watch')||((event.key==='ArrowLeft'||event.key==='ArrowUp')&&name!=='watch')?10:-10);sizePanels();savePanels();};
+  }
+  new ResizeObserver(()=>{if(!el('pane').hidden)sizePanels();}).observe(el('pane'));
+  window.addEventListener('resize',sizePanels);sizePanels();
   function layout(){return {symbol:el('symbol').value,timeframe:el('timeframe').value,style:el('style').value,indicators:Object.fromEntries(indicators.map(name=>[name,el(name).checked]))};}
   function applyLayout(value){
     if(!value||typeof value!=='object')return;
@@ -259,14 +291,14 @@
   }
   function beginOrderEdit(order){
     if(!market?.demo||submitting||closing||order.symbol!==el('symbol').value)return false;
-    editingPosition=null;el('order-price').disabled=false;editingOrder={...order};selectDrawing(-1);el('order-kind').value='PENDING';el('side').value=[2,4].includes(order.type)?'BUY':'SELL';
+    editingPosition=null;el('order-price').disabled=false;editingOrder={...order};if(smallPanels())el('pane').classList.add('mobile-ticket-open');else el('pane').classList.remove('ticket-collapsed');sizePanels();selectDrawing(-1);el('order-kind').value='PENDING';el('side').value=[2,4].includes(order.type)?'BUY':'SELL';
     el('order-price').value=order.price;el('sl').value=order.sl||'';el('tp').value=order.tp||'';el('volume').value=order.volume;
     el('side').disabled=true;el('volume').disabled=true;document.querySelectorAll('[data-ticket-mode]').forEach(button=>button.disabled=true);
     el('ticket-editing').hidden=false;el('ticket-editing').textContent=`Amending pending #${order.ticket} · changes are not sent until confirmed.`;el('ticket-edit-cancel').hidden=false;el('preview').textContent='Review pending amendment';el('show-ticket').checked=true;updateOrderKind();return true;
   }
   function beginPositionEdit(position){
     if(!market?.demo||submitting||closing||position.symbol!==el('symbol').value)return false;
-    editingOrder=null;editingPosition={...position};selectDrawing(-1);el('order-kind').value='MARKET';el('side').value=position.type===0?'BUY':'SELL';
+    editingOrder=null;editingPosition={...position};if(smallPanels())el('pane').classList.add('mobile-ticket-open');else el('pane').classList.remove('ticket-collapsed');sizePanels();selectDrawing(-1);el('order-kind').value='MARKET';el('side').value=position.type===0?'BUY':'SELL';
     el('order-price').value=position.price_open;el('order-price').disabled=true;el('volume').value=position.volume;el('sl').value=position.sl||'';el('tp').value=position.tp||'';
     el('side').disabled=true;el('volume').disabled=true;document.querySelectorAll('[data-ticket-mode]').forEach(button=>button.disabled=true);
     el('ticket-editing').hidden=false;el('ticket-editing').textContent=`Editing position #${position.ticket} · only SL / TP will change after confirmation.`;el('ticket-edit-cancel').hidden=false;el('preview').textContent='Review position SL / TP';el('show-ticket').checked=true;updateOrderKind();return true;
