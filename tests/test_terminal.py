@@ -345,7 +345,11 @@ class TerminalTests(unittest.TestCase):
         result=self.terminal.market({'symbol':'EURUSD','timeframe':'M5'})
         self.assertEqual(result['bars'],[[1000000,1.1,1.2,1,1.15,42]])
         self.assertEqual(result['tick_size'],.00001)
-        self.mt.copy_rates_from_pos.assert_called_once_with('EURUSD',5,0,1000)
+        self.assertTrue(result['trading_allowed'])
+        self.account.trade_expert=False
+        self.assertFalse(self.terminal.market({'symbol':'EURUSD','timeframe':'M5'})['trading_allowed'])
+        self.account.trade_expert=True
+        self.mt.copy_rates_from_pos.assert_called_with('EURUSD',5,0,1000)
         with self.assertRaises(ValueError):self.terminal.market({'symbol':'EURUSD','timeframe':'bad'})
         self.mt.copy_rates_from_pos.return_value=None
         with self.assertRaises(ValueError):self.terminal.market({'symbol':'EURUSD'})

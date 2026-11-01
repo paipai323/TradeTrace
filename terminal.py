@@ -78,7 +78,9 @@ class Terminal:
             raise ValueError('Market data or positions unavailable. Check MT5 connection.')
         self.bridge.check()
         fields = ('ticket', 'symbol', 'type', 'volume', 'price_open', 'price_current', 'sl', 'tp', 'profit')
-        return dict(bars=bars, interval_note=note,
+        terminal = mt.terminal_info()
+        trading_allowed = bool(account.trade_allowed and account.trade_expert and terminal and terminal.connected and terminal.trade_allowed and not terminal.tradeapi_disabled)
+        return dict(bars=bars, interval_note=note, trading_allowed=trading_allowed,
                     bid=tick.bid, ask=tick.ask, quote_time=tick.time, digits=info.digits,
                     tick_size=info.trade_tick_size,point=info.point,stops_distance=info.trade_stops_level*info.point,
                     volume_min=info.volume_min, volume_max=info.volume_max, volume_step=info.volume_step,

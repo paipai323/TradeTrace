@@ -10,6 +10,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
 const candles=Array.from({length:300},(_,i)=>[Date.UTC(2026,9,20)/1+300000*i,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100+i]);
 const hourlyCandles=candles.map((bar,i)=>[Math.floor(candles.at(-1)[0]/3600000)*3600000-(299-i)*3600000,...bar.slice(1)]);
 let browser;
+let tradingAllowed=true,quoteAge=0;
 let estimateMultiplier=1;
 let equityOffset=0;
 let mockBid=1.103;
@@ -31,11 +32,11 @@ const conditionBodies=[];
     else if(endpoint==='/api/connect'||endpoint==='/api/connect-all'){mockConnected=true;connectionCalls++;lastConnectionPath=body.path;value={account:'123',server:'Test-Demo',currency:'USD',path:'C:/Test/terminal64.exe',native:{state:'setup',message:'Test history connector optional',levels:[],key_saved:false}};}
     else if(endpoint==='/api/history')value={trades:[],skipped:0};
     else if(endpoint==='/api/terminal/symbols')value={symbols:['EURUSD','GBPUSD','XAUUSD'],visible:['EURUSD','GBPUSD'],account:'123',server:'Test-Demo',currency:'USD',demo};
-    else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:mockBid,ask:mockBid+.0001,quote_time:Date.now()/1000,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020+equityOffset,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo,orders:pendingExists?[pendingSnapshot]:[],positions:positionClosed?[]:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,...positionLevels,profit:20}]};
+    else if(endpoint==='/api/terminal/market')value={bars:body.timeframe==='H1'?hourlyCandles:candles,bid:mockBid,ask:mockBid+.0001,quote_time:Date.now()/1000-quoteAge,trading_allowed:tradingAllowed,digits:5,tick_size:.00001,volume_min:.01,volume_max:10,volume_step:.01,balance:10000,equity:10020+equityOffset,margin_free:9990,currency:'USD',account:'123',server:'Test-Demo',demo,orders:pendingExists?[pendingSnapshot]:[],positions:positionClosed?[]:[{ticket:'42',symbol:'EURUSD',type:0,volume:.01,price_open:1.101,price_current:1.103,...positionLevels,profit:20}]};
     else if(endpoint==='/api/terminal/closed')value={account:'123',server:'Test-Demo',currency:'USD',positions:[{id:'41',symbol:'EURUSD',side:'BUY',volume:.01,entry:1.1,exit:1.102,end:Date.now(),net:1.8}],note:'Last 30 days · test net P/L'};
     else if(endpoint==='/api/terminal/quotes')value={account:'123',server:'Test-Demo',quotes:Object.fromEntries(body.symbols.map(s=>[s,{bid:mockBid,ask:mockBid+.0001,time:Date.now()/1000}]))};
     else if(endpoint==='/api/terminal/estimate'){draftEstimateCalls++;if(draftEstimateDelay)await new Promise(resolve=>setTimeout(resolve,draftEstimateDelay));const sign=body.side==='BUY'?1:-1,profit=price=>price?sign*(Number(price)-Number(body.entry))*Number(body.volume)*100000*estimateMultiplier:null;value={account:'123',server:'Test-Demo',currency:'USD',sl:profit(Number(body.sl)),tp:profit(Number(body.tp))};}
-    else if(endpoint==='/api/terminal/plan'){planRequests++;if(planDelay)await new Promise(resolve=>setTimeout(resolve,planDelay));value={account:'123',server:'Test-Demo',currency:'USD',risk:12.5,reward:25,mark_to_market:3,quote_time:Date.now()/1000,note:'Mock gross estimate; no trade placed'};}
+    else if(endpoint==='/api/terminal/plan'){planRequests++;if(planDelay)await new Promise(resolve=>setTimeout(resolve,planDelay));value={account:'123',server:'Test-Demo',currency:'USD',risk:12.5,reward:25,mark_to_market:3,quote_time:Date.now()/1000-quoteAge,trading_allowed:tradingAllowed,note:'Mock gross estimate; no trade placed'};}
     else if(endpoint==='/api/terminal/position-preview'){assert.equal(body.position,'42');proposedLevels={sl:Number(body.sl),tp:Number(body.tp)};value={preview:'mock-position-token',expires_in:60,account:'123',server:'Test-Demo',request:{action:6,position:42,symbol:'EURUSD',...proposedLevels}};}
     else if(endpoint==='/api/terminal/modify-preview'){pendingModification={price:Number(body.price),sl:Number(body.sl),tp:Number(body.tp)};value={preview:'mock-modify-token',expires_in:60,account:'123',server:'Test-Demo',request:{order:88,symbol:'EURUSD',...pendingModification}};}
     else if(endpoint==='/api/terminal/cancel-preview')value={preview:'mock-cancel-token',expires_in:60,account:'123',server:'Test-Demo',request:{order:88,symbol:'EURUSD',action:8}};
@@ -404,5 +405,38 @@ const conditionBodies=[];
   await page.locator('#terminal-condition-template-delete').click();
   assert.equal(await page.locator('#terminal-condition-template-load').isDisabled(),true);assert.equal(await page.locator('.terminal-condition-row').count(),2);
   assert.equal(submissions,templateSubmissions,'saving, loading, repositioning, previewing and removing templates never submits orders');
+  const readinessSubmissions=submissions;
+  await page.locator('#terminal-setup-new').click();
+  await page.locator('#terminal-setup-tab-conditions').click();
+  assert.match(await page.locator('#terminal-setup-readiness-account').textContent(),new RegExp(demo?'DEMO':'LIVE'));
+  assert.match(await page.locator('#terminal-setup-readiness-checks').textContent(),/No conditions: Start acts immediately/);
+  assert.match(await page.locator('#terminal-setup-readiness-action').textContent(),/No order is sent/);
+  await page.locator('#terminal-condition-action').selectOption('AUTO');
+  assert.equal(await page.locator('#terminal-condition-start').isDisabled(),true,'missing protection blocks automatic Start');
+  assert.match(await page.locator('#terminal-setup-readiness-checks').textContent(),/Set positive SL and TP/);
+  await page.locator('#terminal-setup-tab-order').click();
+  await page.locator('[data-ticket-mode=MARKET]').click();await page.locator('[data-ticket-side=BUY]').click();
+  await page.locator('#terminal-sl').fill('1.09');await page.locator('#terminal-tp').fill('1.12');await page.locator('#terminal-volume').fill('0.015');
+  assert.equal(await page.locator('#terminal-condition-start').isDisabled(),true,'broker lot step is required');
+  await page.locator('#terminal-volume').fill('0.01');
+  await page.waitForFunction(()=>!document.querySelector('#terminal-condition-start').disabled);
+  assert.match(await page.locator('#terminal-setup-readiness-action').textContent(),/one automatic .* order attempt/);
+  tradingAllowed=false;
+  await page.waitForFunction(()=>document.querySelector('#terminal-setup-readiness-checks').textContent.includes('Enable account trading'));
+  assert.equal(await page.locator('#terminal-condition-start').isDisabled(),true);
+  await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-condition-action').selectOption('ALERT');
+  assert.equal(await page.locator('#terminal-condition-start').isDisabled(),false,'alerts do not need trading permissions');
+  quoteAge=90;
+  await page.waitForFunction(()=>document.querySelector('#terminal-setup-readiness-checks').textContent.includes('Quote is stale'));
+  assert.equal(await page.locator('#terminal-condition-start').isDisabled(),true);
+  quoteAge=0;tradingAllowed=true;
+  await page.waitForFunction(()=>!document.querySelector('#terminal-condition-start').disabled);
+  await page.locator('#terminal-condition-action').selectOption('REVIEW');
+  assert.match(await page.locator('#terminal-setup-readiness-action').textContent(),/confirmation is required/);
+  await page.locator('#terminal-condition-sizing').selectOption('AUTO');
+  assert.match(await page.locator('#terminal-setup-readiness-checks').textContent(),/lots are calculated when conditions pass/);
+  await page.locator('#terminal-setup-readiness').scrollIntoViewIfNeeded();
+  await page.locator('#terminal-ticket').screenshot({path:path.join(root,'work/setup-readiness.png')});
+  assert.equal(submissions,readinessSubmissions,'readiness never starts a monitor or submits an order');
   assert.deepEqual(errors,[]);console.log('Condition browser tests passed (mock broker; no real trades)');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{await browser?.close();server.kill();});

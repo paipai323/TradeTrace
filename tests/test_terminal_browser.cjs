@@ -109,6 +109,9 @@ let browser;
   await page.locator('#terminal-custom-count').fill('7');
   await page.locator('#terminal-custom-interval button[type="submit"]').click();
   assert.equal(await page.locator('#terminal-timeframe').inputValue(),'M7');
+  // Keep this coordinate-based chart regression in its compact ticket layout.
+  // The expanded readiness panel is covered by test_conditions_browser.cjs.
+  await page.locator('#terminal-setup-readiness summary').click();
   await page.locator('#terminal-interval-favorites [data-interval="M5"]').click();
   await page.locator('summary').filter({hasText:'Indicators'}).click();
   for(const name of ['ema','bb','rsi','macd','volume-indicator'])await page.locator('#terminal-'+name).check();

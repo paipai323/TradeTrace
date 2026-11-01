@@ -795,6 +795,7 @@
     if(conditionBusy||submitting||reviewing||closing)return;
     try{
       if(!market||document.hidden||el('pane').hidden)throw Error('Connect and open Terminal first.');
+      const readiness=setupReadiness();if(readiness.some(item=>item.state==='blocked'))throw Error(readiness.find(item=>item.state==='blocked').message);
       const rows=C.validate(conditionRows()),action=el('condition-action').value;
       const timeout=Number(el('condition-timeout').value)*60,gap=Number(el('condition-gap').value);
       if(!Number.isFinite(timeout)||!Number.isFinite(gap)||timeout<0||gap<0)throw Error('Timeout and quote gap must be nonnegative.');
@@ -1131,7 +1132,7 @@
     return `${C.rules[row.rule]||'Choose rule'} · ${price} · ${row.mode==='LIVE'?'Live Bid':row.timeframe+' candle'}`;
   }
   function renderConditionComparison(){
-    renderConditionPreview();
+    renderConditionPreview();renderSetupReadiness();
     const applied=conditionApplied,draft=conditionRows(),currentSettings=comparisonSettings(conditionComparisonSettings()),appliedSettings=comparisonSettings(applied?.settings);
     const key=JSON.stringify([applied,draft.map(({visible,...row})=>row),currentSettings]);if(key===conditionComparisonKey)return;conditionComparisonKey=key;
     const pairs=[];let changes=0;
@@ -1252,6 +1253,46 @@
     const node=el('condition-preview-text');if(node.textContent!==message)node.textContent=message;
   }
   renderConditionTemplates();
+
+
+  function setupReadiness(){
+    const checks=[],add=(name,state,message)=>checks.push({name,state,message}),trade=el('condition-action').value!=='ALERT';
+    const fresh=market&&Date.now()/1000-market.quote_time<=30&&market.quote_time<=Date.now()/1000+5;
+    add('Quotes',fresh?'ready':'blocked',!market?'Connect MT5 and load this market.':fresh?'Current broker quote available.':'Quote is stale. Wait for a fresh quote or reconnect.');
+    const rows=conditionRows(),invalid=rows.map((row,index)=>Object.keys(C.fieldErrors(row)).length?index+1:0).filter(Boolean);
+    add('Conditions',conditionDraftValid?'ready':'blocked',invalid.length?`Fix highlighted fields in condition ${invalid.join(', ')}.`:!conditionDraftValid?'Fix timeout or quote-gap settings.':rows.length?`${rows.length} valid condition${rows.length===1?'':'s'}, in order.`:'No conditions: Start acts immediately.');
+    if(trade){
+      add('Trading permissions',market?.trading_allowed===false?'blocked':market?.trading_allowed===true?'ready':'pending',market?.trading_allowed===false?'Enable account trading, Algo Trading and external Python trading in MT5.':market?.trading_allowed===true?'MT5 trading permissions enabled.':'Permissions will be checked by MT5 before execution.');
+      const sl=Number(el('sl').value),tp=Number(el('tp').value),pending=el('order-kind').value!=='MARKET',entry=Number(el('order-price').value),buy=el('side').value==='BUY';
+      const reference=pending?entry:buy?market?.bid:market?.ask,distance=market?.stops_distance||0;
+      const protection=Number.isFinite(sl)&&Number.isFinite(tp)&&sl>0&&tp>0&&reference>0&&(buy?sl<reference-distance&&tp>reference+distance:sl>reference+distance&&tp<reference-distance);
+      add('SL / TP',protection?'ready':'blocked',protection?'Protection is on the correct side of entry at current broker distance.':'Set positive SL and TP on the correct sides of entry in Order, respecting broker stop distance.');
+      if(pending)add('Pending entry',Number.isFinite(entry)&&entry>0?'ready':'blocked',Number.isFinite(entry)&&entry>0?`${buy?'BUY':'SELL'} ${inferredKind()||'pending'} at ${comparisonPrice(entry)}; broker validates distance at execution.`:'Enter a positive pending entry price in Order.');
+      if(el('condition-sizing').value==='AUTO'){
+        const valid=Number.isFinite(market?.equity)&&market.equity>0;
+        add('Sizing',valid?'pending':'blocked',valid?'2% equity: lots are calculated when conditions pass; minimum lots and risk budget are checked then.':'2% sizing needs positive account equity.');
+      }else{
+        const volume=Number(el('volume').value),step=market?.volume_step,units=volume/step;
+        const valid=market&&Number.isFinite(volume)&&volume>=market.volume_min&&volume<=market.volume_max&&step>0&&Math.abs(units-Math.round(units))<1e-6;
+        add('Sizing',valid?'ready':'blocked',valid?`${volume} lots within broker limits.`:`Enter lots within ${market?.volume_min??'broker minimum'}–${market?.volume_max??'broker maximum'}, step ${step||'as specified by broker'}, in Order.`);
+      }
+      if(editingOrder||editingPosition)add('Ticket','blocked','Finish or discard the amendment; conditions require a new order ticket.');
+    }else add('Order fields','ready','Alert only: SL / TP, lots and trading permissions are not required.');
+    if(conditionBusy||submitting||reviewing||closing)add('Busy','blocked','Wait for the current order request or review to finish.');
+    return checks;
+  }
+  function renderSetupReadiness(){
+    const checks=setupReadiness(),blocked=checks.filter(item=>item.state==='blocked'),action=el('condition-action').value;
+    const type=market?.demo?'DEMO':'LIVE',account=market?`${type} · ${market.account} · ${market.server}`:'No connected account';
+    const outcome=action==='AUTO'?`Start arms one automatic ${type} order attempt when all steps pass. No retries.`:action==='REVIEW'?'Start monitors the steps, then prepares an order. Your confirmation is required to send.':'Start monitors the steps, then shows an alert. No order is sent.';
+    const set=(id,value)=>{if(el(id).textContent!==value)el(id).textContent=value;};
+    set('setup-readiness-account',account);el('setup-readiness-account').dataset.live=String(!!market&&!market.demo);
+    set('setup-readiness-action',outcome);
+    set('setup-readiness-state',blocked.length?`${blocked.length} to fix`:'Ready to start');
+    const list=el('setup-readiness-checks'),key=JSON.stringify(checks);
+    if(list.dataset.key!==key){list.dataset.key=key;list.replaceChildren(...checks.map(item=>{const row=text('li',`${item.state==='blocked'?'Fix':item.state==='pending'?'At execution':'OK'} · ${item.name}: ${item.message}`);row.dataset.state=item.state;return row;}));}
+    el('condition-start').disabled=!!blocked.length;
+  }
 
   selectSetupTab('order');
 
