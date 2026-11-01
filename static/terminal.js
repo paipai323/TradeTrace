@@ -383,6 +383,7 @@
   function updateSelectionPrices(forcePlanFields=false){
     const item=currentDrawings()[selectedDrawing];
     const metrics=A.positionMetrics(item);
+    el('drawing-condition').disabled=!item||!['level','rectangle'].includes(item.type);
     const levels=metrics?[{title:'Entry',price:metrics.entry},{title:'Stop loss',price:metrics.stop},{title:'Take profit',price:metrics.target}]:!item?[]:item.type==='fib'?[0,.236,.382,.5,.618,.786,1].map(r=>({title:`Fib ${r}`,price:item.a.price+(item.b.price-item.a.price)*r})):item.type==='level'?[{title:'Level',price:item.a.price}]:[{title:item.type==='rectangle'?'Corner A':'Anchor A',price:item.a.price},{title:item.type==='rectangle'?'Corner B':'Anchor B',price:item.b.price}];
     if(main){while(selectedPriceLines.length>levels.length)main.removePriceLine(selectedPriceLines.pop());levels.forEach((level,i)=>{const options={...level,title:'',color:'#70e4c2',axisLabelColor:'#70e4c2',axisLabelTextColor:'#10241f',axisLabelVisible:true,lineVisible:false,lineWidth:1};if(selectedPriceLines[i])selectedPriceLines[i].applyOptions(options);else selectedPriceLines.push(main.createPriceLine(options));});}
     updatePositionPlan(item,forcePlanFields);
@@ -698,22 +699,22 @@
   el('chart').addEventListener('pointerup',event=>{if(conditionDrag){event.preventDefault();event.stopImmediatePropagation();finishConditionDrag();return;}if(orderDrag){event.preventDefault();event.stopImmediatePropagation();finishOrderDrag();return;}if(!drawingDrag)return;event.preventDefault();event.stopImmediatePropagation();finishDrawingDrag();},true);
   el('chart').addEventListener('pointercancel',()=>{finishConditionDrag(true);finishOrderDrag(true);finishDrawingDrag(true);},true);
   const C=window.TerminalConditions;
-  let conditionRun=null,conditionBusy=false,conditionDraftScope='',conditionFinished='',conditionLastResult='';
+  let conditionRun=null,conditionBusy=false,conditionDraftScope='',conditionFinished='',conditionLastResult='',conditionApplied=null;
   const conditionMessage=message=>{if(el('condition-status').textContent!==message)el('condition-status').textContent=message;const phase=conditionRun&&!conditionRun.attempted?'Running':conditionFinished?'Finished':conditionBusy?'Finishing':message.startsWith('Stopped')?'Stopped':'Draft';el('setup-phase').textContent=phase;el('setup-phase').dataset.phase=phase.toLowerCase();el('condition-stop').disabled=!conditionRun&&!conditionBusy;el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;};
   const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
-  function stopConditions(message){conditionRun=null;if(el('condition-status'))conditionMessage(conditionFinished||message);}
+  function stopConditions(message){conditionRun=null;if(conditionApplied?.state==='running')conditionApplied.state='stopped';if(el('condition-status'))conditionMessage(conditionFinished||message);renderConditionProgress();}
   function finishConditions(message,run){
     if(run&&(run.scope!==scope||run.symbol!==el('symbol').value)){
-      try{const key=`tradetrace.conditions.v1:${run.scope}:${run.symbol}`,draft=JSON.parse(localStorage.getItem(key)||'{}');localStorage.setItem(key,JSON.stringify({...draft,finished:message,lastResult:message}));}catch(_){}
+      try{const key=`tradetrace.conditions.v1:${run.scope}:${run.symbol}`,draft=JSON.parse(localStorage.getItem(key)||'{}');localStorage.setItem(key,JSON.stringify({...draft,finished:message,lastResult:message,applied:run.applied}));}catch(_){}
       return;
     }
-    conditionRun=null;conditionFinished=message;conditionLastResult=message;conditionMessage(message);saveConditions();renderSetupResult();
+    conditionRun=null;conditionFinished=message;conditionLastResult=message;if(run?.applied)conditionApplied=run.applied;conditionMessage(message);saveConditions();renderSetupResult();
   }
-  function conditionRows(){return [...el('condition-list').children].map(row=>({visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
-  function saveConditions(){try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
+  function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
+  function saveConditions(){try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
   function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
-    const row=text('div','','terminal-condition-row');row.dataset.visible=String(value.visible!==false);
-    const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);header.append(summary);row.append(header,editor);
+    const row=text('div','','terminal-condition-row');row.dataset.visible=String(value.visible!==false);row.dataset.conditionId=typeof value.id==='string'&&value.id&&!([...el('condition-list').children].some(item=>item.dataset.conditionId===value.id))?value.id:crypto.randomUUID();
+    const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);const badge=text('span','Draft','terminal-condition-progress');badge.dataset.progress='draft';badge.setAttribute('aria-label','Condition progress');header.append(summary,badge);row.append(header,editor);
     row.onfocusin=event=>{if(!event.target.closest('.terminal-condition-summary'))selectCondition(row);};row.onclick=event=>{if(row.isConnected&&!event.target.closest('.terminal-condition-summary'))selectCondition(row);};
     const visibility=text('label','Show on chart'),check=document.createElement('input');check.type='checkbox';check.checked=value.visible!==false;check.setAttribute('aria-label','Show condition on chart');check.onchange=()=>{row.dataset.visible=String(check.checked);saveConditions();};visibility.prepend(check);header.append(visibility);
     const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);if(!options){const pick=text('button','Pick on chart');pick.type='button';pick.onclick=()=>{setTool('cursor');selectCondition(row);conditionPick={row,field:name};el('tool-hint').textContent='Click the chart to set condition '+name+' · Escape cancels';};label.append(pick);}editor.append(label);return input;};
@@ -727,6 +728,7 @@
   function restoreConditions(){
     const key=conditionStorage();if(conditionDraftScope===key)return;conditionDraftScope=key;
     let value={};try{value=JSON.parse(localStorage.getItem(key)||'{}');}catch(_){}
+    const applied=value.applied;conditionApplied=applied?.state==='finished'&&Array.isArray(applied.rows)&&applied.index===applied.rows.length?applied:null;
     conditionLastResult=typeof value.lastResult==='string'?value.lastResult:typeof value.finished==='string'?value.finished:'';renderSetupResult();
     conditionFinished=typeof value.finished==='string'?value.finished:'';stopConditions('Stopped. Review the restored draft and start when ready.');
     selectedConditionRow=null;conditionPick=null;
@@ -746,6 +748,7 @@
   const conditionContextValid=run=>conditionRun===run&&run.scope===scope&&run.symbol===el('symbol').value&&!document.hidden&&!el('pane').hidden;
   async function conditionComplete(run){
     if(!conditionContextValid(run)||run.attempted)return;run.attempted=true;
+    run.applied.index=run.sequence.index;run.applied.state='finished';renderConditionProgress();
     conditionMessage('All conditions passed.');
     if(run.action==='ALERT'){finishConditions('All conditions passed. Finished — click Start conditions to start again.',run);return;}
     conditionBusy=true;
@@ -793,8 +796,8 @@
       if(action!=='ALERT'&&(!market.demo||editingOrder||editingPosition))throw Error('Use a new demo order ticket for condition entries.');
       const ticket={symbol:el('symbol').value,side:el('side').value,order_kind:el('order-kind').value,price:el('order-price').value,volume:el('volume').value,sl:el('sl').value,tp:el('tp').value};
       if(action!=='ALERT'&&(!(Number(ticket.sl)>0)||!(Number(ticket.tp)>0)))throw Error('Enter SL and TP in the order ticket first.');
-      conditionFinished='';stopConditions('');saveConditions();invalidate();
-      conditionRun={scope,symbol:ticket.symbol,action,ticket,sizing:el('condition-sizing').value,sequence:new C.Sequence(rows,{timeout,gap}),attempted:false};
+      conditionFinished='';stopConditions('');conditionApplied={rows:structuredClone(rows),index:0,state:'running'};saveConditions();invalidate();
+      conditionRun={scope,symbol:ticket.symbol,action,ticket,sizing:el('condition-sizing').value,sequence:new C.Sequence(rows,{timeout,gap}),applied:conditionApplied,attempted:false};
       conditionMessage(`${action==='AUTO'?'DEMO ORDER ARMED':action==='REVIEW'?'Review preparation running':'Alerts running'} · step ${rows.length?1:0} of ${rows.length}. Draft edits require Start again.`);
       if(!rows.length)await conditionComplete(conditionRun);
     }catch(error){conditionMessage(error.message);}
@@ -814,7 +817,8 @@
         if(candles.length<2)throw Error('Not enough completed candles.');
       }catch(error){stopConditions('Stopped: '+error.message);return;}
     }
-    if(run.sequence.observe({bid:next.bid,time:next.quote_time,candles}))await conditionComplete(run);
+    const complete=run.sequence.observe({bid:next.bid,time:next.quote_time,candles});run.applied.index=run.sequence.index;run.applied.state=complete?'finished':'running';renderConditionProgress();
+    if(complete)await conditionComplete(run);
     else conditionMessage(`${run.action==='AUTO'?'DEMO ORDER ARMED':'Monitoring'} · step ${run.sequence.index+1} of ${run.sequence.rows.length}. Draft edits require Start again.`);
   }
 
@@ -921,7 +925,7 @@
       const summary=`${index+1}. ${C.rules[value('rule')]||'Choose rule'} · ${prices} · ${value('mode')==='LIVE'?'Bid':value('timeframe')}`;
       const button=row.querySelector('.terminal-condition-summary');if(button.textContent!==summary)button.textContent=summary;
     }
-    el('condition-empty').hidden=el('condition-list').children.length>0;
+    el('condition-empty').hidden=el('condition-list').children.length>0;renderConditionProgress();
   }
   function renderSetupResult(){
     el('setup-last-result').hidden=!conditionLastResult;
@@ -931,12 +935,42 @@
     if(conditionBusy||submitting||reviewing||closing){conditionMessage('Wait for the current broker request to finish before creating a new draft.');return;}
     finishConditionDrag(true);conditionPick=null;
     if(conditionFinished)conditionLastResult=conditionFinished;
-    conditionFinished='';conditionRun=null;selectedConditionRow=null;el('condition-list').replaceChildren();
+    conditionFinished='';conditionRun=null;conditionApplied=null;selectedConditionRow=null;el('condition-list').replaceChildren();
     el('condition-action').value='ALERT';el('condition-start').textContent='Start conditions';
     endOrderEdit();dismissTicketDraft();el('volume').value=market?.volume_min||.01;
     conditionMessage('Draft. Configure conditions and order, then Start.');
     saveConditions();renderSetupResult();selectSetupTab('conditions');
   };
+  const conditionSignature=row=>JSON.stringify(['rule','mode','timeframe','level','low','high'].map(key=>row?.[key]));
+  function renderConditionProgress(){
+    const draft=conditionRows();
+    for(const [index,row] of [...el('condition-list').children].entries()){
+      const badge=row.querySelector('.terminal-condition-progress');if(!badge)continue;
+      const appliedIndex=conditionApplied?.rows.findIndex(item=>item?.id===row.dataset.conditionId)??-1;
+      let label='Draft',kind='draft',hint='Not applied. Start conditions to monitor this rule.';
+      if(appliedIndex>=0){
+        const unchanged=appliedIndex===index&&conditionSignature(draft[index])===conditionSignature(conditionApplied.rows[appliedIndex]);
+        if(!unchanged){label='Edited';kind='edited';hint=`Draft differs from applied step ${appliedIndex+1}. Monitoring uses the frozen setup from Start.`;}
+        else if(appliedIndex<conditionApplied.index){label='Passed';kind='passed';hint=`Applied step ${appliedIndex+1} has passed.`;}
+        else if(conditionApplied.state==='running'){label=appliedIndex===conditionApplied.index?'Watching':'Waiting';kind=label.toLowerCase();hint=label==='Watching'?'This is the only step currently being monitored.':'Waiting for earlier steps to pass.';}
+        else{label='Stopped';kind='stopped';hint='Monitoring is stopped. Start conditions to begin a new run.';}
+      }
+      if(badge.textContent!==label)badge.textContent=label;badge.dataset.progress=kind;badge.title=hint;
+    }
+  }
+  el('drawing-condition').onclick=()=>{
+    const drawing=currentDrawings()[selectedDrawing];if(!drawing||!['level','rectangle'].includes(drawing.type))return;
+    const level=planPrice(drawing.a.price),low=drawing.b?planPrice(Math.min(drawing.a.price,drawing.b.price)):0,high=drawing.b?planPrice(Math.max(drawing.a.price,drawing.b.price)):0;
+    if(drawing.type==='rectangle'&&(!(low>0)||high<=low)){status('The zone needs two different positive prices before it can become a condition.');return;}
+    if(drawing.type==='level'&&!(level>0)){status('Choose a positive price level.');return;}
+    restoreConditions();
+    const row=conditionRow({rule:drawing.type==='level'?'TRADED_ABOVE':'ZONE_ENTER',mode:'LIVE',timeframe:C.frames.includes(el('timeframe').value)?el('timeframe').value:'H1',level:drawing.type==='level'?level:0,low,high,visible:true});
+    if(smallPanels())el('pane').classList.add('mobile-ticket-open');else el('pane').classList.remove('ticket-collapsed');sizePanels();
+    setTool('cursor');selectSetupTab('conditions');selectCondition(row);
+    row.scrollIntoView({block:'nearest'});
+    el('tool-hint').textContent='Condition draft copied from drawing. Choose its rule, then Start to apply.';
+  };
+
   selectSetupTab('order');
 
   buildChart();setTool('cursor');
