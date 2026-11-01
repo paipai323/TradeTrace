@@ -7,6 +7,7 @@ import secrets
 import threading
 import time
 from condition_engine import Sequence, Structure, STRUCTURE, FRAMES, finite
+from terminal import ConditionInvalidated
 
 
 def closed(data):
@@ -40,7 +41,7 @@ class ConditionMonitor:
     def status(self,body=None):
         if not self.run:return dict(run=None)
         run=self.run;result={key:copy.deepcopy(value) for key,value in run.items() if not key.startswith('_') and key not in ('sequence','event_no','fingerprint','review_deadline')}
-        result['applied']=dict(rows=copy.deepcopy(run['rows']),index=run['sequence'].index,state='running' if run['phase']=='running' else 'finished' if run['attempted'] else 'stopped',settings=copy.deepcopy(run['settings']))
+        result['applied']=dict(rows=copy.deepcopy(run['rows']),index=run['sequence'].index,state='running' if run['phase']=='running' else 'finished' if run['attempted'] and run['phase']!='invalidated' else 'stopped',settings=copy.deepcopy(run['settings']))
         result['structureState']=copy.deepcopy(run['sequence'].structure_state)
         result['revision']=run['event_no']
         return dict(run=result)
@@ -83,6 +84,7 @@ class ConditionMonitor:
         if (initial['account'],initial['server'])!=(str(account.login),account.server):raise ValueError('Account changed during Start.')
         if not finite(initial.get('quote_time')) or not self.clock()-30<=initial['quote_time']<=self.clock()+5:raise ValueError('Quote is stale at Start.')
         if first:sequence.observe(initial['bid'],initial['quote_time'],closed(initial) if first['mode']=='CANDLE' else [])
+        invalidation=self._resolve_invalidation(settings.get('invalidation'),ticket,symbol,initial)
         self.stop({'reason':'Stopped: replaced by an explicitly started setup.'})
         self.requests[request_id]=fingerprint
         if len(self.requests)>100:self.requests.pop(next(iter(self.requests)))
@@ -91,7 +93,7 @@ class ConditionMonitor:
                       account=str(account.login),server=account.server,symbol=symbol,action=action,settings=copy.deepcopy(settings),rows=copy.deepcopy(sequence.rows),
                       sequence=sequence,phase='running',attempted=False,started=int(self.clock()*1000),last_poll=self.clock(),
                       message=f'Server monitoring · {symbol} · step {1 if sequence.rows else 0} of {len(sequence.rows)}. Continues while the browser is hidden.',
-                      events=[],event_no=0,observations=[],review=None,result=None,sent=False,_cancel=threading.Event())
+                      events=[],event_no=0,observations=[],review=None,result=None,invalidation=invalidation,invalidation_trigger=None,sent=False,_cancel=threading.Event())
         self.run['demo']=bool(initial.get('demo'))
         self.run['message']=f'Server monitoring · {"DEMO" if self.run["demo"] else "LIVE"} ORDER ARMED · {symbol} · frozen AUTO setup from Start.' if action=='AUTO' else self.run['message']
         self._event('Started',f'{len(sequence.rows)} conditions · {action} · local server monitoring. Frozen settings from Start.')
@@ -123,12 +125,71 @@ class ConditionMonitor:
         if not finite(data.get('quote_time')) or not self.clock()-30<=data['quote_time']<=self.clock()+5:raise ValueError('Quote is stale.')
         return data
 
+
+    def _resolve_invalidation(self,settings,ticket,symbol,initial):
+        if settings is None:return dict(enabled=False)
+        if not isinstance(settings,dict) or not isinstance(settings.get('enabled',False),bool):raise ValueError('Invalid setup invalidation settings.')
+        if not settings.get('enabled'):return dict(enabled=False)
+        source=settings.get('source');swing=None
+        if source=='LEVEL':
+            level=settings.get('level');direction=settings.get('direction')
+            if not finite(level) or level<=0 or direction not in ('BELOW','ABOVE'):raise ValueError('Choose a positive cancellation level and Bid direction.')
+        elif source=='SWING':
+            tf=settings.get('timeframe');n=settings.get('sensitivity');buffer=settings.get('buffer')
+            if tf not in FRAMES or not finite(n) or int(n)!=n or not 1<=n<=10:raise ValueError('Choose an invalidation timeframe and 1–10 swing candles each side.')
+            if not finite(buffer) or int(buffer)!=buffer or not 0<=buffer<=1000000:raise ValueError('Invalidation buffer must be 0–1,000,000 broker ticks.')
+            data=self.terminal.market(dict(symbol=symbol,timeframe=tf))
+            if (data['account'],data['server'],bool(data.get('demo')))!=(initial['account'],initial['server'],bool(initial.get('demo'))):raise ValueError('Account changed while establishing invalidation.')
+            if not finite(data.get('quote_time')) or not self.clock()-30<=data['quote_time']<=self.clock()+5:raise ValueError('Invalidation quote is stale.')
+            model=Structure(n)
+            for bar in closed(data):model.push(bar)
+            swings=model.lows if ticket['side']=='BUY' else model.highs;swing=swings[-1] if swings else None
+            if not swing or swing['broken']:raise ValueError('A usable confirmed invalidation swing is unavailable. Choose another timeframe or a manual level.')
+            direction='BELOW' if ticket['side']=='BUY' else 'ABOVE';tick=data.get('tick_size')
+            if not finite(tick) or tick<=0:raise ValueError('Broker tick size unavailable for invalidation.')
+            raw=swing['price']+(-1 if direction=='BELOW' else 1)*buffer*tick
+            level=round((math.floor(raw/tick+1e-8) if direction=='BELOW' else math.ceil(raw/tick-1e-8))*tick,10)
+            if level<=0:raise ValueError('Invalidation level must remain positive.')
+            initial=data
+        else:raise ValueError('Choose manual price or confirmed swing invalidation.')
+        guard=dict(enabled=True,source=source,direction=direction,level=level,frozen_at=int(self.clock()*1000),swing=copy.deepcopy(swing),
+                   timeframe=settings.get('timeframe') if source=='SWING' else None,buffer=settings.get('buffer',0) if source=='SWING' else 0)
+        if self._guard_hit(guard,initial['bid']):raise ValueError('Setup is already invalid at the current Bid. Adjust the cancellation level or wait for a new setup.')
+        return guard
+
+    @staticmethod
+    def _guard_hit(guard,bid):
+        return guard.get('enabled') and (bid<=guard['level'] if guard['direction']=='BELOW' else bid>=guard['level'])
+
+    def _check_invalidation(self,data):
+        run=self.run;guard=run['invalidation']
+        if not self._guard_hit(guard,data['bid']):return False
+        if run.get('review'):self.terminal.previews.pop(run['review']['preview'],None)
+        run['review']=None;run['_cancel'].set();run['phase']='invalidated'
+        run['invalidation_trigger']=dict(at=int(self.clock()*1000),bid=data['bid'],quote_time=data['quote_time'],guard=copy.deepcopy(guard))
+        run['message']=f'Invalidated: Bid {data["bid"]} reached the cancellation level ({"at/below" if guard["direction"]=="BELOW" else "at/above"} {guard["level"]}). No order sent. Start explicitly for a new setup.'
+        self._event('Invalidated',run['message']);return True
+
+    def before_submission(self,body):
+        run=self.run
+        if not run or run['phase']!='review' or body.get('preview')!=run['review']['preview'] or not run['invalidation']['enabled']:return
+        if self.clock()-run['last_poll']>30:
+            self.stop(dict(reason='Stopped: monitoring interruption before confirmation. Review and start again.'))
+            raise ValueError('Setup monitoring was interrupted. No order sent.')
+        data=self._market('M1');run['last_poll']=self.clock()
+        if self._check_invalidation(data):raise ValueError('Setup invalidated before confirmation. No order sent.')
+
     def tick(self):
         run=self.run
         if not run:return
         if run['phase']=='review':
             if self.clock()>=run['review_deadline']:
                 self.terminal.previews.pop(run['review']['preview'],None);run['review']=None;self._finish('Finished: condition review expired. Start explicitly for a new setup.')
+            elif run['invalidation']['enabled']:
+                try:
+                    if self.clock()-run['last_poll']>30:self.stop(dict(reason='Stopped: server monitoring was interrupted during review.'));return
+                    data=self._market('M1');run['last_poll']=self.clock();self._check_invalidation(data)
+                except Exception as error:self.stop(dict(reason='Stopped: '+str(error)+' Review invalidated; no order sent.'))
             return
         if run['phase']!='running':return
         if run['_cancel'].is_set():self.stop();return
@@ -139,6 +200,7 @@ class ConditionMonitor:
             sequence=run['sequence'];step=sequence.rows[sequence.index] if not sequence.done else None
             data=self._market(step['timeframe'] if step and step['mode']=='CANDLE' else 'M1')
             if run['_cancel'].is_set():self.stop();return
+            if self._check_invalidation(data):return
             candles=closed(data) if step and step['mode']=='CANDLE' else []
             if sequence.done:self._complete(data);return
             complete=sequence.observe(data['bid'],data['quote_time'],candles)
@@ -151,6 +213,9 @@ class ConditionMonitor:
                     self._event('Step passed',f'Step {event["index"]+1}/{len(sequence.rows)}: {rule["rule"]} {level} · Bid {data["bid"]}.')
             if complete:self._complete(data)
             else:run['message']=f'Server monitoring · {"AUTO ORDER ARMED" if run["action"]=="AUTO" else "Review preparation" if run["action"]=="REVIEW" else "Alerts only"} · {run["symbol"]} · step {sequence.index+1} of {len(sequence.rows)}'+(' · '+sequence.structure_state['status'] if sequence.structure_state else '')+'. Frozen setup from Start; continues while the browser is hidden.'
+        except ConditionInvalidated as error:
+            run['sent']=False
+            self._check_invalidation(dict(bid=error.bid,quote_time=self.clock()))
         except Exception as error:
             self._finish(('Finished: ' if run['attempted'] else 'Stopped: ')+str(error)+' No automatic retry. Check MT5 before starting again.','finished' if run['attempted'] else 'stopped')
 
@@ -161,8 +226,8 @@ class ConditionMonitor:
         if run['action']=='ALERT':self._finish('All conditions passed. Finished — click Start conditions to start again.');return
         settings=run['settings'];ticket=settings['ticket'];plan=settings.get('autoPlan') or {'enabled':False}
         body=dict(symbol=run['symbol'],side=ticket['side'],order_kind=ticket['order-kind'],price=ticket.get('order-price'),volume=ticket.get('volume'),sl=ticket.get('sl'),tp=ticket.get('tp'),
-                  condition_entry=True,expected_account=run['account'],expected_server=run['server'],condition_risk_auto=settings['sizing']=='AUTO',
-                  condition_setup=dict(started=run['started'],completed=int(self.clock()*1000),action=run['action'],rows=copy.deepcopy(run['rows']),settings=copy.deepcopy(settings),observations=copy.deepcopy(run['observations']),monitor='local server'))
+                  condition_entry=True,condition_invalidation=copy.deepcopy(run['invalidation']),expected_account=run['account'],expected_server=run['server'],condition_risk_auto=settings['sizing']=='AUTO',
+                  condition_setup=dict(started=run['started'],completed=int(self.clock()*1000),action=run['action'],rows=copy.deepcopy(run['rows']),settings=copy.deepcopy(settings),observations=copy.deepcopy(run['observations']),invalidation=copy.deepcopy(run['invalidation']),monitor='local server'))
         if plan.get('enabled'):
             candles=closed(self._market(plan['timeframe']));tracker=Structure(plan['sensitivity'])
             for bar in candles:tracker.push(bar)
@@ -184,8 +249,10 @@ class ConditionMonitor:
         if (result['account'],result['server'])!=(run['account'],run['server']):raise ValueError('Account changed during order preparation.')
         if run['_cancel'].is_set():
             self.terminal.previews.pop(result['preview'],None);self.stop();return
+        if run['invalidation']['enabled'] and self._check_invalidation(self._market('M1')):
+            self.terminal.previews.pop(result['preview'],None);return
         if run['action']=='REVIEW':
-            run['review']=result;run['review_deadline']=self.clock()+result['expires_in'];run['review_expires']=run['review_deadline'];run['phase']='review';run['message']='Conditions complete. Confirm the prepared order in Order. Server monitoring finished; no order sent.'
+            run['review']=result;run['review_deadline']=self.clock()+result['expires_in'];run['review_expires']=run['review_deadline'];run['phase']='review';run['message']='Conditions complete. Confirm the prepared order in Order. No order sent. Invalidation remains active until confirmation when enabled.'
             self._event('Review ready',run['message']);return
         self._event('Order attempt','One automatic submission. Check MT5 for final status.')
         run['sent']=True
@@ -195,5 +262,6 @@ class ConditionMonitor:
     def record_submission(self,body,result=None,error=None):
         run=self.run
         if not run or run['phase']!='review' or body.get('preview')!=run['review']['preview']:return
+        if isinstance(error,ConditionInvalidated):self._check_invalidation(dict(bid=error.bid,quote_time=self.clock()));return
         run['review']=None;run['result']=copy.deepcopy(result)
         self._finish('Finished: '+(str(error)+' Check MT5. No automatic retry.' if error else f'broker {result["retcode"]}: {result["comment"]}. Check MT5 for final execution status.'))

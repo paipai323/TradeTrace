@@ -8,6 +8,12 @@ from datetime import datetime, timezone, timedelta
 from timeframes import NATIVE, interval, aggregate
 
 
+class ConditionInvalidated(ValueError):
+    def __init__(self,bid):
+        self.bid=bid
+        super().__init__(f'Setup invalidated at Bid {bid}; no order sent.')
+
+
 class Terminal:
     def __init__(self, bridge):
         self.bridge = bridge
@@ -294,6 +300,12 @@ class Terminal:
         if body.get('condition_entry'):
             if (str(account.login), account.server) != (str(body.get('expected_account')), body.get('expected_server')):
                 raise ValueError('Condition account changed. Start again.')
+            guard=body.get('condition_invalidation') or {}
+            if not isinstance(guard,dict):raise ValueError('Invalid condition invalidation guard.')
+            if guard.get('enabled'):
+                level=guard.get('level');direction=guard.get('direction')
+                if not isinstance(level,(int,float)) or isinstance(level,bool) or not math.isfinite(level) or level<=0 or direction not in ('BELOW','ABOVE'):raise ValueError('Invalid condition cancellation level.')
+                if tick.bid<=level if direction=='BELOW' else tick.bid>=level:raise ConditionInvalidated(tick.bid)
             if not sl or not tp:
                 raise ValueError('Condition entries require SL and TP.')
             if body.get('condition_risk_auto'):

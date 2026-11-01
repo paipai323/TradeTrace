@@ -149,9 +149,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = terminal.condition_plan(body)
             elif self.path == '/api/terminal/submit':
                 try:
+                    condition_monitor.before_submission(body)
                     result = terminal.submit(body)
                 except Exception as error:
-                    condition_monitor.record_submission(body,error=str(error))
+                    condition_monitor.record_submission(body,error=error)
                     raise
                 condition_monitor.record_submission(body,result=result)
             elif self.path == '/api/journal/overview':
