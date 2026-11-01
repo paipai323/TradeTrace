@@ -23,3 +23,35 @@
 .terminal-inferred-type{float:right;color:#70e4c2;background:#213649;border-radius:4px;font-size:10px;padding:2px 5px}@media(max-width:950px){#terminal-ticket{display:block}.terminal-side-cards{max-width:100%}#terminal-ticket .terminal-ticket-pair{display:block}}
 
 .terminal-broker-label{position:absolute;display:flex;align-items:center;height:25px;max-width:230px;pointer-events:auto;border:1px solid var(--level-color);border-radius:4px;background:#101b28;color:var(--level-color);font-size:10px;box-shadow:0 2px 5px #0004}.terminal-broker-label span{padding:4px 7px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.terminal-broker-label button{background:none;border:0;border-left:1px solid var(--level-color);border-radius:0;color:inherit;padding:3px 7px!important;font-size:14px!important;cursor:pointer}.terminal-broker-label button:disabled{opacity:.35}
+
+/* Let the graph absorb the height supplied by the adjacent order ticket. */
+.terminal-center{display:flex;flex-direction:column}.terminal-center>*{flex-shrink:0}.terminal-center>.terminal-chart-area{flex:1 0 570px;height:auto;min-height:570px}.terminal-chart-stack{min-height:0}#terminal-chart{position:absolute;inset:0}
+@media(max-width:1200px){.terminal-center>.terminal-chart-area{flex-basis:520px;min-height:520px}}@media(max-width:950px){.terminal-center>.terminal-chart-area{flex-basis:460px;min-height:460px}}@media(max-width:650px){.terminal-center>.terminal-chart-area{flex-basis:420px;min-height:420px}}
+
+/* Trading workspace uses the available screen width, including wide monitors. */
+body:has(#terminal-pane:not([hidden])) main{max-width:none;width:100%;padding-left:8px;padding-right:8px}
+
+/* Shared app navigation stays in the same place when changing workspaces. */
+body>header{height:auto;min-height:64px;padding:10px 16px;gap:24px;background:#101925}
+body>header .brand{flex:0 0 auto;font-size:24px;white-space:nowrap}
+body>header .brand span{font-size:12px;letter-spacing:2px}
+body>header .journal-nav{flex:1;align-items:center;gap:5px;margin:0;min-width:0}
+body>header .journal-nav button{padding:9px 12px;font-size:12px;border-color:transparent;border-radius:6px;color:#99adc5}
+body>header .journal-nav button.selected{background:#1a3934;border-color:#356258;color:#83e4cb}
+body>header .tag{font-size:9px;letter-spacing:.5px;padding:6px 8px}
+body:has(#terminal-pane:not([hidden])) main{padding-top:12px;padding-bottom:12px}
+body:has(#terminal-pane:not([hidden])) .intro,body:has(#terminal-pane:not([hidden]))>footer{display:none}
+body:has(#terminal-pane:not([hidden])):not(.terminal-connection-open) .connection,
+body:has(#terminal-pane:not([hidden])):not(.terminal-connection-open) .checks,
+body:has(#terminal-pane:not([hidden])):not(.terminal-connection-open) main>#status{display:none}
+body:has(#terminal-pane:not([hidden])).terminal-connection-open .connection{margin-bottom:10px}
+.terminal-top{padding:2px 8px 8px;gap:10px}.terminal-top .eyebrow{display:none}.terminal-top h2{font-size:20px;margin:0}.terminal-actions{gap:8px}
+#terminal-status{margin:0 8px 10px;font-size:11px;min-height:17px;color:#7e91ac}
+.terminal-toolbar{padding:9px 12px;border-radius:6px 6px 0 0}
+.terminal-chart-heading{min-height:58px;padding:12px 16px}.terminal-chart-heading #terminal-ohlc{min-height:15px}.terminal-chart-heading #terminal-indicator-values{height:22px}
+@media(max-width:1300px){body>header .tag{display:none}}
+@media(max-width:800px){body>header{gap:10px;flex-wrap:wrap;padding:10px 12px}body>header .brand{font-size:20px}body>header .journal-nav{flex-basis:100%}body>header .journal-nav button{padding:8px;font-size:11px}body>header #journal-backup{margin-left:auto;font-size:10px}.terminal-top{align-items:center}.terminal-actions{flex-wrap:wrap}}
+@media(max-width:480px){body>header #journal-backup{flex-basis:100%;margin-left:0;text-align:left}.terminal-actions{gap:5px}#terminal-pane .terminal-actions button{padding:8px;font-size:10px}}
+
+@media(min-width:1201px){.terminal-center>.terminal-chart-area{flex-basis:650px;min-height:650px}}@media(min-width:951px) and (max-width:1200px){.terminal-center>.terminal-chart-area{flex-basis:600px;min-height:600px}}
+.terminal-trade-tabs{display:flex;gap:18px;align-items:center}.terminal-trade-tabs button{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;padding:10px 3px!important;color:#8d9fb8}.terminal-trade-tabs button[aria-selected=true]{color:#7ee3c6;border-bottom-color:#7ee3c6}.terminal-trade-tabs span{margin-left:6px;font-size:10px;color:#8d9fb8}.terminal-trade-panel{min-height:185px}.terminal-trade-panel>.terminal-panel-title{border-bottom:1px solid #263348}.terminal-trade-panel .terminal-table{max-height:300px;overflow:auto}.terminal-trade-panel th{white-space:nowrap}.terminal-trade-panel td{white-space:nowrap}

@@ -16,6 +16,7 @@
   let closeToken=null,closePosition=null,cancelOrder=null,closeOperation='close',closeRevision=0,closeLoading=false,closing=false,closeExpiryTimer;
   let selectedDrawing=-1,drawingDrag=null,selectedPriceLines=[];
   let ticketEstimate=null,ticketEstimateKey='',ticketEstimateContext='',ticketEstimateVersion=0,ticketEstimateTimer,ticketEstimateAt=0,ticketEstimatePending=false,ticketEstimateError='';
+  let tradeTab='open',closedLoading=false,closedAt=0,closedScope='';
   let planEstimate=null,planEstimateKey='',planEstimateContext='',planEstimateRevision=0,planEstimateTimer,planEstimatePending=false,planEstimateAt=0;
   const workspaceKey=()=>JSON.stringify([scope,el('symbol').value,el('timeframe').value]);
   const drawingKey=()=>JSON.stringify([scope,el('symbol').value]);
@@ -499,13 +500,37 @@
       if(closeToken&&cancelOrder&&!closing&&!orders.some(o=>o.ticket===cancelOrder.ticket)){cancelClose(false);el('close-status').textContent='Order is no longer pending. Check whether it filled in open positions.';}
       const orderNames={2:'BUY LIMIT',3:'SELL LIMIT',4:'BUY STOP',5:'SELL STOP',6:'BUY STOP LIMIT',7:'SELL STOP LIMIT'};
       el('orders').replaceChildren(...(orders.length?orders.map(order=>{const row=document.createElement('tr');for(const value of [order.ticket,order.symbol,orderNames[order.type]||order.type,order.volume,order.price,order.sl||'—',order.tp||'—'])row.append(text('td',value));const cell=document.createElement('td'),button=text('button','Cancel','terminal-cancel-action');button.type='button';button.dataset.order=order.ticket;button.disabled=!next.demo||closing||closeLoading||submitting;button.onclick=()=>reviewCancel(order);const edit=text('button','Edit');edit.type='button';edit.dataset.editOrder=order.ticket;edit.disabled=!next.demo||order.symbol!==el('symbol').value||![2,3,4,5].includes(order.type)||submitting||closing;edit.onclick=()=>beginOrderEdit(order);cell.append(edit,button);row.append(cell);return row;}):[(()=>{const row=document.createElement('tr'),cell=text('td','No pending orders.');cell.colSpan=8;row.append(cell);return row;})()]));
+      if(tradeTab==='closed'&&(closedScope!==scope||Date.now()-closedAt>15000))loadClosed();
       updateTicket();renderMarket();status(stale?'Market is quiet or closed. Showing the latest available broker candles.':`${symbol} · ${bars.length} broker candles · ${next.interval_note||'Drawings and layouts save locally'}`);
       const quoteSymbols=[...new Set([...state.watch,...state.alerts.filter(a=>!a.fired).map(a=>a.symbol)])];
       if(quoteSymbols.length){try{const result=await call('terminal/quotes',{symbols:quoteSymbols});if(version===revision){if(JSON.stringify([result.server,result.account])!==scope)throw Error('Account changed. Reconnect MT5.');quotes=result.quotes;renderWatchlist();checkAlerts();}}catch(error){if(version===revision)status('Chart loaded; watchlist quotes unavailable: '+error.message);}}
     }catch(error){if(version===revision){el('feed').textContent='Disconnected';el('feed').classList.remove('online');status(error.message);running=false;nextAutoConnect=Date.now()+10000;market=null;invalidate();}}
     finally{loading=false;if(version!==revision)refresh();}
   }
+  async function loadClosed(){
+    if(!market||closedLoading)return;closedLoading=true;const expectedScope=scope;
+    if(closedScope!==scope){closedAt=0;el('closed').replaceChildren();}
+    el('closed-status').textContent='Loading closed positions from MT5…';
+    try{
+      const result=await call('terminal/closed',{});if(scope!==expectedScope)return;
+      if(JSON.stringify([result.server,result.account])!==scope)throw Error('Account changed. Reconnect MT5.');
+      const rows=result.positions.map(p=>{const row=document.createElement('tr');
+        for(const value of [p.id,p.symbol,p.side,p.volume,Number(p.entry).toLocaleString('en-US',{maximumFractionDigits:8}),Number(p.exit).toLocaleString('en-US',{maximumFractionDigits:8}),new Date(p.end).toISOString().replace('T',' ').slice(0,19),`${Number(p.net).toFixed(2)} ${result.currency}`])row.append(text('td',value));
+        row.lastChild.className=p.net>=0?'gain':'loss';return row;});
+      if(!rows.length){const row=document.createElement('tr'),cell=text('td','No supported closed positions in the last 30 days.');cell.colSpan=8;row.append(cell);rows.push(row);}
+      el('closed').replaceChildren(...rows);el('closed-status').textContent=result.note;closedAt=Date.now();closedScope=scope;
+    }catch(error){if(scope===expectedScope){el('closed-status').textContent=error.message;closedAt=Date.now();}}finally{closedLoading=false;}
+  }
+  function selectTradeTab(name,focus=false){
+    tradeTab=name;for(const tab of ['open','pending','closed']){const active=tab===name;el('panel-'+tab).hidden=!active;el('tab-'+tab).setAttribute('aria-selected',String(active));el('tab-'+tab).tabIndex=active?0:-1;}
+    if(focus)el('tab-'+name).focus();if(name==='closed'&&(closedScope!==scope||Date.now()-closedAt>15000))loadClosed();
+  }
+  for(const name of ['open','pending','closed']){
+    el('tab-'+name).onclick=()=>selectTradeTab(name);
+    el('tab-'+name).onkeydown=event=>{const names=['open','pending','closed'],index=names.indexOf(name);if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();selectTradeTab(names[event.key==='Home'?0:event.key==='End'?2:(index+(event.key==='ArrowRight'?1:2))%3],true);}};
+  }
   el('start').onclick=()=>connectWorkspace();
+  el('settings').onclick=()=>{const open=document.body.classList.toggle('terminal-connection-open');el('settings').setAttribute('aria-expanded',String(open));document.getElementById('connection-settings').open=open;if(open)document.querySelector('.connection').scrollIntoView({block:'start'});};
   el('symbol').onchange=selectionChanged;el('timeframe').onchange=()=>chooseInterval(el('timeframe').value);
   for(const name of [...indicators,'style'])el(name).onchange=()=>{buildChart();setTool(tool);persist();};
   document.querySelectorAll('[data-drawing]').forEach(button=>button.onclick=()=>setTool(button.dataset.drawing));
@@ -554,7 +579,7 @@
   };
   el('submit').onclick=async()=>{
     if(!preview||submitting||closing)return;const token=preview;invalidate(false);submitting=true;updateTicket();
-    try{const result=await call('terminal/submit',{preview:token});el('order-summary').replaceChildren(text('strong',`Broker result ${result.retcode}: ${result.comment}`),text('p',result.operation==='position-sltp'?`Position SL / TP amendment result. ${result.message}`:result.operation==='modify'?`Pending amendment result for order ${result.order}. Check the broker order list for final levels. ${result.message}`:result.operation==='pending'?`Pending order ${result.order}. Broker result determines acceptance; this is not a filled position. ${result.message}`:`Order ${result.order} · deal ${result.deal} · filled ${result.volume} at ${result.price}. ${result.message}`));if(result.operation==='pending'){for(const field of ['order-price','sl','tp'])el(field).value='';updateOrderHint();syncDraftLines();}}
+    try{const result=await call('terminal/submit',{preview:token});el('order-summary').replaceChildren(text('strong',`Broker result ${result.retcode}: ${result.comment}`),text('p',result.operation==='position-sltp'?`Position SL / TP amendment result. ${result.message}`:result.operation==='modify'?`Pending amendment result for order ${result.order}. Check the broker order list for final levels. ${result.message}`:result.operation==='pending'?`Pending order ${result.order}. Broker result determines acceptance; this is not a filled position. ${result.message}`:`Order ${result.order} · deal ${result.deal} · filled ${result.volume} at ${result.price}. ${result.message}`));if(result.operation==='pending'){selectTradeTab('pending');for(const field of ['order-price','sl','tp'])el(field).value='';updateOrderHint();syncDraftLines();}}
     catch(error){el('order-summary').textContent=error.message+' Check MT5 before retrying.';}finally{submitting=false;updateTicket();refresh();}
   };
   el('journal').onclick=()=>{if(typeof allowJournalSwitch==='function'&&!allowJournalSwitch())return;document.getElementById('journal-search').value=el('symbol').value;showJournalView('journal');};

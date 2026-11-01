@@ -112,6 +112,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = terminal.plan(body)
             elif self.path == '/api/terminal/estimate':
                 result = terminal.estimate(body)
+            elif self.path == '/api/terminal/closed':
+                result = terminal.closed(body)
             elif self.path == '/api/terminal/preview':
                 result = terminal.preview(body)
             elif self.path == '/api/terminal/close-preview':

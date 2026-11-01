@@ -136,6 +136,21 @@ class Terminal:
         self.bridge.check()
         return dict(account=str(account.login),server=account.server,currency=account.currency,**values)
 
+    def closed(self, body):
+        from core import closed_positions
+        mt,account=self.connection()
+        end=datetime.now(timezone.utc)
+        # Include entries before the display window, so older positions closed
+        # recently retain their entry price and opening commission.
+        deals=mt.history_deals_get(datetime(2000,1,1,tzinfo=timezone.utc),end)
+        if deals is None:raise ValueError('Cannot read closed positions from MT5. Try again.')
+        positions,skipped=closed_positions(deals)
+        cutoff=(end-timedelta(days=30)).timestamp()*1000
+        recent=[p for p in positions if p['end']>=cutoff]
+        self.bridge.check()
+        return dict(account=str(account.login),server=account.server,currency=account.currency,positions=recent[:100],
+                    note='Last 30 days · up to 100 closed positions · net includes commission, swap and fees. Scale-ins, partial closes and reversals are omitted.')
+
     def request(self, body, position=None, pending_order=None):
         if body.get('operation') == 'position-sltp':
             return self.position_request(body)

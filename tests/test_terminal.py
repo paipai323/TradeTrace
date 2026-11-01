@@ -45,6 +45,22 @@ class TerminalTests(unittest.TestCase):
         self.assertEqual((result['sl'],result['tp']),(7.5,None))
         self.mt.order_send.assert_not_called();self.mt.order_check.assert_not_called()
 
+    def test_closed_history_includes_older_entry_and_all_linked_costs(self):
+        now=time.time()*1000
+        def deal(ticket,entry,side,when,**values):
+            return Row(**{**dict(ticket=ticket,position_id=42,type=side,entry=entry,time_msc=when,volume=.1,
+                symbol='EURUSD',price=1.1,reason=0,order=ticket,profit=0,commission=-.5,swap=0,fee=0),**values})
+        self.mt.history_deals_get.return_value=[deal(1,0,0,now-45*86400000),deal(2,1,1,now,profit=10,swap=-1,fee=-.2)]
+        result=self.terminal.closed({})
+        self.assertEqual(len(result['positions']),1)
+        self.assertEqual(result['positions'][0]['net'],7.8)
+        self.assertEqual(self.mt.history_deals_get.call_args.args[0].year,2000)
+        self.mt.order_send.assert_not_called()
+
+    def test_closed_history_failure_is_not_reported_as_empty(self):
+        self.mt.history_deals_get.return_value=None
+        with self.assertRaisesRegex(ValueError,'Cannot read'):self.terminal.closed({})
+
     def test_draft_estimates_reject_invalid_or_unavailable_values(self):
         body=dict(symbol='EURUSD',side='BUY',volume=.01,entry=1.1,sl=1.09)
         for change in [dict(entry=0),dict(volume=.015),dict(tp=-1),dict(sl=float('nan')),dict(side='invalid')]:
