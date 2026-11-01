@@ -651,7 +651,7 @@
   };
   el('submit').onclick=async()=>{
     if(!preview||submitting||closing)return;const token=preview;invalidate(false);submitting=true;updateTicket();
-    try{const result=await call('terminal/submit',{preview:token});el('order-summary').replaceChildren(text('strong',`Broker result ${result.retcode}: ${result.comment}`),text('p',result.operation==='position-sltp'?`Position SL / TP amendment result. ${result.message}`:result.operation==='modify'?`Pending amendment result for order ${result.order}. Check the broker order list for final levels. ${result.message}`:result.operation==='pending'?`Pending order ${result.order}. Broker result determines acceptance; this is not a filled position. ${result.message}`:`Order ${result.order} · deal ${result.deal} · filled ${result.volume} at ${result.price}. ${result.message}`));if(result.operation==='pending'){selectTradeTab('pending');for(const field of ['order-price','sl','tp'])el(field).value='';updateOrderHint();syncDraftLines();}}
+    try{const result=await call('terminal/submit',{preview:token});el('order-summary').replaceChildren(text('strong',`Broker result ${result.retcode}: ${result.comment}`),text('p',result.operation==='position-sltp'?`Position SL / TP amendment result. ${result.message}`:result.operation==='modify'?`Pending amendment result for order ${result.order}. Check the broker order list for final levels. ${result.message}`:result.operation==='pending'?`Pending order ${result.order}. Broker result determines acceptance; this is not a filled position. ${result.message}`:`Order ${result.order} · deal ${result.deal} · filled ${result.volume} at ${result.price}. ${result.message}`));if(result.journal_warning)el('order-summary').append(text('p',result.journal_warning));else if(result.journal_recorded)el('order-summary').append(text('p','Condition setup saved to journal.'));if(result.operation==='pending'){selectTradeTab('pending');for(const field of ['order-price','sl','tp'])el(field).value='';updateOrderHint();syncDraftLines();}}
     catch(error){el('order-summary').textContent=error.message+' Check MT5 before retrying.';}finally{submitting=false;updateTicket();refresh();}
   };
   el('journal').onclick=()=>{if(typeof allowJournalSwitch==='function'&&!allowJournalSwitch())return;document.getElementById('journal-search').value=el('symbol').value;showJournalView('journal');};
@@ -763,7 +763,7 @@
       const next=await call('terminal/market',{symbol:run.symbol,timeframe:'M1'});
       if(!conditionContextValid(run))return;
       if(JSON.stringify([next.server,next.account])!==run.scope)throw Error('Account changed.');
-      const body={...run.ticket,condition_entry:true,condition_risk_auto:run.sizing==='AUTO',expected_account:next.account,expected_server:next.server};
+      const body={...run.ticket,condition_entry:true,condition_setup:{started:run.started,completed:Date.now(),action:run.action,rows:structuredClone(run.applied.rows),settings:structuredClone(run.applied.settings),observations:structuredClone(run.observations)},condition_risk_auto:run.sizing==='AUTO',expected_account:next.account,expected_server:next.server};
       if(run.sizing==='AUTO'){
         const entry=body.order_kind==='MARKET'?(body.side==='BUY'?next.ask:next.bid):Number(body.price);
         const adverse=entry+(body.side==='BUY'?1:-1)*20*(next.point||next.tick_size);
@@ -787,7 +787,7 @@
       conditionRun=null;submitting=true;invalidate();updateTicket();
       logConditionEvent('Order attempt',`${body.side} ${body.order_kind} submission attempted once. Check MT5 for final status.`,run);
       const sent=await call('terminal/submit',{preview:result.preview});
-      finishConditions(`Finished · broker ${sent.retcode}: ${sent.comment}. Order ${sent.order}, deal ${sent.deal}. Check MT5 for final status. Start conditions is required for another setup.`,run);
+      finishConditions(`Finished · broker ${sent.retcode}: ${sent.comment}. Order ${sent.order}, deal ${sent.deal}. Check MT5 for final status. ${sent.journal_warning|| (sent.journal_recorded?'Setup saved to journal.':'')} Start conditions is required for another setup.`,run);
     }catch(error){logConditionEvent('Blocked',error.message,run);finishConditions(`Finished: ${error.message} No automatic retry. Check MT5 before explicitly starting another setup.`,run);}
     finally{conditionBusy=false;submitting=false;conditionMessage(el('condition-status').textContent);updateTicket();}
   }
@@ -803,7 +803,7 @@
       const ticket={symbol:el('symbol').value,side:el('side').value,order_kind:el('order-kind').value,price:el('order-price').value,volume:el('volume').value,sl:el('sl').value,tp:el('tp').value};
       if(action!=='ALERT'&&(!(Number(ticket.sl)>0)||!(Number(ticket.tp)>0)))throw Error('Enter SL and TP in the order ticket first.');
       conditionFinished='';stopConditions('');conditionApplied={rows:structuredClone(rows),index:0,state:'running',settings:conditionComparisonSettings()};saveConditions();invalidate();
-      conditionRun={scope,symbol:ticket.symbol,action,ticket,sizing:el('condition-sizing').value,sequence:new C.Sequence(rows,{timeout,gap}),applied:conditionApplied,attempted:false};
+      conditionRun={scope,started:Date.now(),observations:[],symbol:ticket.symbol,action,ticket,sizing:el('condition-sizing').value,sequence:new C.Sequence(rows,{timeout,gap}),applied:conditionApplied,attempted:false};
       logConditionEvent('Started',`${rows.length} condition${rows.length===1?'':'s'} · ${action==='AUTO'?'automatic entry':action==='REVIEW'?'prepare for review':'alerts only'}. Starting at step 1.`,conditionRun);
       conditionMessage(`${action==='AUTO'?`${market?.demo?'DEMO':'LIVE'} ORDER ARMED`:action==='REVIEW'?'Review preparation running':'Alerts running'} · step ${rows.length?1:0} of ${rows.length}. Draft edits require Start again.`);
       if(!rows.length)await conditionComplete(conditionRun);
@@ -826,6 +826,8 @@
     }
     const complete=run.sequence.observe({bid:next.bid,time:next.quote_time,candles});
     for(const event of run.sequence.events){
+      run.observations.push({...event,observed_at:Date.now(),quote_time:next.quote_time,bid:next.bid,candle:step?.mode==='CANDLE'?structuredClone(candles.at(-1)):null});
+      if(run.observations.length>100)run.observations.shift();
       if(event.type==='reset')logConditionEvent('Reset',event.reason==='quote-gap'?`${event.seconds.toFixed(0)}s without a fresh quote. Progress reset to step 1.`:`Sequence timeout after ${event.seconds.toFixed(0)}s. Progress reset to step 1.`,run);
       else{const item=run.sequence.rows[event.index],criterion=C.zone(item.rule)?`${item.low}–${item.high}`:item.level,observation=item.mode==='LIVE'?`Bid ${next.bid.toFixed(next.digits)}`:`${item.timeframe} closed candle ${candles.at(-1)?.close}`;logConditionEvent('Step passed',`Step ${event.index+1}/${run.sequence.rows.length}: ${C.rules[item.rule]} ${criterion} · ${observation}.`,run);}
     }

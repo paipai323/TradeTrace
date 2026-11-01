@@ -96,6 +96,7 @@ function showJournalView(view){
   placeReplay();
   if(view!=='replay'&&$('journal-inline-replay').hidden)pause();
   renderJournal();updateReplayActions();
+  if(['journal','calendar'].includes(view))refreshJournal(journalModel.account).catch(error=>status(error.message));
 }
 for(const view of ['journal','calendar','replay','terminal'])$('nav-'+view).onclick=()=>showJournalView(view);
 function updateReplayActions(){
@@ -110,7 +111,7 @@ function updateReplayActions(){
 async function refreshJournal(account){
   const result=await api('journal/overview',account?{account}:{});
   const changed=result.account!==journalModel.account;
-  journalModel=result;
+  journalModel=result;renderJournalConditionEntries();
   $('journal-account').replaceChildren();
   if(!result.accounts.length)$('journal-account').append(new Option('No synced accounts yet',''));
   for(const row of result.accounts)$('journal-account').append(new Option(`${row.server} · ${row.login} · ${row.currency}`,row.id));
@@ -177,6 +178,7 @@ async function openJournalTrade(position){
     journalSavedVersion=entry.updated||null;
     let draft=entry.draft&&entry.draft.base_updated===journalSavedVersion?entry.draft:null;
     try{const local=JSON.parse(localStorage.getItem(draftKey(account,position)));if(local?.base_updated===journalSavedVersion&&typeof local.review?.notes==='string'&&(!draft||local.updated>draft.updated))draft=local;}catch(_){}
+    renderConditionEntryCards($('journal-trade-condition-entries').querySelector('div'),entry.condition_entries||[]);$('journal-trade-condition-entries').hidden=!entry.condition_entries?.length;
     const trade=entry.trade,review=draft?draft.review:entry.review||{};
     $('journal-empty').hidden=true;$('journal-form').hidden=false;
     $('journal-title').textContent=`${trade.symbol} / ${trade.side}`;
@@ -347,3 +349,24 @@ refreshJournal().catch(error=>status(error.message));
 window.addEventListener('DOMContentLoaded',()=>{
   try{const savedView=localStorage.getItem('tradetrace.last-view')||(localStorage.getItem('tradetrace.terminal.v2')?'terminal':'journal');if(['journal','calendar','replay','terminal'].includes(savedView))showJournalView(savedView);}catch(_){/* Keep the initial journal view. */}
 });
+
+function conditionEntryCard(item){
+  const card=element('details'),result=item.result||{},request=item.request||{},setup=item.setup||{};
+  const side=setup.settings?.ticket?.side||([0,2,4].includes(request.type)?'BUY':'SELL'),kind=({2:'LIMIT',3:'LIMIT',4:'STOP',5:'STOP'})[request.type]||'MARKET';
+  const status=result.operation==='pending'?'Pending order accepted':Number(result.deal)>0?'Execution reported':'Order accepted; check MT5';
+  card.append(element('summary',`${item.demo?'DEMO':'LIVE'} · ${side} ${kind} ${request.symbol||'Unknown symbol'} · ${status} · #${result.order} · ${new Date(item.created).toLocaleString()}`));
+  card.append(element('p',`Order ${result.order} · deal ${result.deal} · broker ${result.retcode}: ${result.comment}. Requested ${request.volume??'?'} lots at ${request.price??'?'}. Reported volume ${result.volume}, price ${result.price}. Requested SL ${request.sl||'none'}, TP ${request.tp||'none'}.`));
+  card.append(element('p',`${setup.action==='AUTO'?'Automatic entry':setup.action==='REVIEW'?'Conditions followed by manual confirmation':'Condition entry'} · ${setup.settings?.sizing==='AUTO'?'2% equity':'Ticket lots'} · timeout ${setup.settings?.timeout??'?'} min · quote-gap reset ${setup.settings?.gap??'?'} s · started ${setup.started?new Date(setup.started).toLocaleString():'not recorded'}.`));
+  const list=element('ol');for(const row of setup.rows||[]){const label=window.TerminalConditions?.rules[row.rule]||row.rule;list.append(element('li',`${label} · ${row.mode==='LIVE'?'Live Bid':row.timeframe+' closed candle'} · ${window.TerminalConditions?.zone(row.rule)?row.low+'–'+row.high:row.level}`));}card.append(list);
+  if(!(setup.rows||[]).length)card.append(element('p','No conditions recorded (an empty sequence acts immediately).'));
+  const observations=element('details');observations.append(element('summary',`Observed events · ${(setup.observations||[]).length}`));
+  for(const event of setup.observations||[])observations.append(element('p',`${new Date(event.observed_at).toLocaleString()} · ${event.type==='reset'?'Reset: '+event.reason:'Step '+(event.index+1)+' passed'} · Bid ${event.bid}${event.candle?' · completed candle '+new Date(event.candle.time*1000).toLocaleString()+' O '+event.candle.open+' H '+event.candle.high+' L '+event.candle.low+' C '+event.candle.close:''}`));card.append(observations);
+  if(item.position){const button=element('button',`Open closed trade #${item.position}`);button.type='button';button.onclick=()=>openJournalTrade(item.position);card.append(button);}
+  return card;
+}
+function renderConditionEntryCards(node,entries){node.replaceChildren(...entries.map(conditionEntryCard));}
+function renderJournalConditionEntries(){
+  const entries=journalModel.condition_entries||[];$('journal-condition-count').textContent=entries.length;
+  renderConditionEntryCards($('journal-condition-entries'),entries);
+  if(!entries.length)$('journal-condition-entries').append(element('p','No condition entries recorded for this account yet.'));
+}

@@ -34,6 +34,10 @@ class Journal:
           CREATE TABLE IF NOT EXISTS drafts (
             account TEXT NOT NULL, position TEXT NOT NULL, review TEXT NOT NULL, updated TEXT NOT NULL, base_updated TEXT,
             PRIMARY KEY(account,position), FOREIGN KEY(account,position) REFERENCES trades(account,position));
+          CREATE TABLE IF NOT EXISTS condition_entries (
+            id TEXT PRIMARY KEY, account TEXT NOT NULL REFERENCES accounts(id),
+            order_ticket TEXT NOT NULL, position TEXT, created TEXT NOT NULL, payload TEXT NOT NULL);
+          CREATE INDEX IF NOT EXISTS condition_entries_account ON condition_entries(account,created);
           CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY,value TEXT);
         ''')
         try:
@@ -50,6 +54,9 @@ class Journal:
             con.execute("INSERT INTO settings VALUES ('last_account',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (account,))
             for trade in trades:
                 snapshot = dict(trade, currency=currency)
+                if trade.get('entry_order'):
+                    con.execute('UPDATE condition_entries SET position=? WHERE account=? AND order_ticket=?',
+                                (str(trade['id']), account, str(trade['entry_order'])))
                 con.execute('''INSERT INTO trades(account,position,snapshot) VALUES (?,?,?)
                   ON CONFLICT(account,position) DO UPDATE SET snapshot=excluded.snapshot''',
                   (account, str(trade['id']), json.dumps(snapshot, allow_nan=False)))
@@ -68,7 +75,9 @@ class Journal:
             for row in con.execute('SELECT * FROM trades WHERE account=?', (account,)):
                 trades.append(dict(**json.loads(row['snapshot']), review=json.loads(row['review']), updated=row['updated'],has_draft=row['position'] in drafts))
             trades.sort(key=lambda t:t['end'], reverse=True)
-        return dict(account=account, accounts=accounts, trades=trades)
+            entries = [dict(id=row['id'], position=row['position'], created=row['created'], **json.loads(row['payload']))
+                       for row in con.execute('SELECT * FROM condition_entries WHERE account=? ORDER BY created DESC LIMIT 200', (account,))]
+        return dict(account=account, accounts=accounts, trades=trades, condition_entries=entries)
 
     def entry(self, account, position):
         with self.db() as con:
@@ -78,7 +87,28 @@ class Journal:
             images = [dict(image) for image in con.execute('SELECT id,name,mime FROM images WHERE account=? AND position=?', (account,position))]
             draft=con.execute('SELECT review,updated,base_updated FROM drafts WHERE account=? AND position=?',(account,position)).fetchone()
             saved_draft=dict(review=json.loads(draft['review']),updated=draft['updated'],base_updated=draft['base_updated']) if draft else None
-            return dict(trade=json.loads(row['snapshot']), review=json.loads(row['review']), updated=row['updated'], images=images,draft=saved_draft)
+            return dict(trade=json.loads(row['snapshot']), review=json.loads(row['review']), updated=row['updated'], images=images,draft=saved_draft,
+                        condition_entries=[dict(id=item['id'], created=item['created'], **json.loads(item['payload']))
+                            for item in con.execute('SELECT * FROM condition_entries WHERE account=? AND position=? ORDER BY created', (account,position))])
+
+
+    def record_condition_entry(self, entry_id, login, server, currency, payload):
+        """Store a separate immutable execution snapshot; never create a closed trade or edit a review."""
+        encoded=json.dumps(payload, allow_nan=False)
+        if len(encoded.encode('utf-8'))>100000:
+            raise ValueError('Condition journal record is too large.')
+        account=json.dumps([str(login),server],separators=(',', ':'))
+        with self.db() as con:
+            con.execute('INSERT INTO accounts VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET currency=excluded.currency',
+                        (account,str(login),server,currency))
+            order=str(payload['result']['order'])
+            trade=con.execute('SELECT position,snapshot FROM trades WHERE account=?',(account,)).fetchall()
+            position=next((row['position'] for row in trade if str(json.loads(row['snapshot']).get('entry_order',''))==order),None) if order!='0' else None
+            con.execute('INSERT OR IGNORE INTO condition_entries VALUES (?,?,?,?,?,?)',
+                        (entry_id,account,order,position,datetime.now(timezone.utc).isoformat(),encoded))
+            # Do not change an existing user's selected journal account.
+            con.execute("INSERT OR IGNORE INTO settings VALUES ('last_account',?)",(account,))
+        return account
 
     def clean_review(self, review):
         if not isinstance(review, dict):

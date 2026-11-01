@@ -1,4 +1,6 @@
 """Local market workspace and single-use market order previews."""
+import hashlib
+import json
 import math
 import secrets
 import time
@@ -327,6 +329,15 @@ class Terminal:
             mt=self.bridge.mt
             resolved_kind='LIMIT' if request['type'] in (mt.ORDER_TYPE_BUY_LIMIT,mt.ORDER_TYPE_SELL_LIMIT) else 'STOP'
             body={**body,'order_kind':resolved_kind}
+        if body.get('condition_entry') and body.get('condition_setup') is not None:
+            setup=body['condition_setup']
+            if not isinstance(setup,dict) or len(json.dumps(setup,allow_nan=False).encode('utf-8'))>60000:
+                raise ValueError('Invalid or oversized condition setup snapshot.')
+            for field in ('rows','observations'):
+                items=setup.get(field,[])
+                if not isinstance(items,list) or len(items)>100 or any(not isinstance(item,dict) for item in items):
+                    raise ValueError('Invalid condition setup '+field+'.')
+            body={**body,'condition_setup':json.loads(json.dumps(setup,allow_nan=False))}
         now = time.monotonic()
         self.previews = {k:v for k,v in self.previews.items() if v['expires'] > now}
         if len(self.previews) >= 100:
@@ -362,7 +373,19 @@ class Terminal:
             except Exception:
                 pass # A failed refresh must never conceal a completed send.
         operation=preview['body'].get('operation') or ('pending' if preview['body'].get('order_kind','MARKET')!='MARKET' else 'open')
-        return dict(retcode=result.retcode, comment=result.comment, order=str(result.order), deal=str(result.deal),
+        response = dict(retcode=result.retcode, comment=result.comment, order=str(result.order), deal=str(result.deal),
                     operation=operation,remaining_volume=remaining,
                     price=result.price, volume=result.volume,
                     message='Check MT5 positions/history for final execution status. Do not automatically retry.')
+        if preview['body'].get('condition_entry') and result.retcode in (10008,10009,10010):
+            try:
+                self.bridge.journal.record_condition_entry(
+                    hashlib.sha256(str(body.get('preview','')).encode()).hexdigest(),account.login,account.server,account.currency,
+                    dict(setup=preview['body'].get('condition_setup') or {}, request=dict(request), result=dict(response),
+                         demo=account.trade_mode==self.bridge.mt.ACCOUNT_TRADE_MODE_DEMO))
+                response['journal_recorded']=True
+            except Exception:
+                # A storage failure after order_send must never look like a failed trade or trigger retry.
+                response['journal_recorded']=False
+                response['journal_warning']='Order request completed, but the setup could not be saved to the journal. Check MT5; do not resend.'
+        return response

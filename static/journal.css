@@ -21,3 +21,5 @@
 .screenshot-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 #journal-form .screenshot-actions button{margin:0;padding:10px 13px;min-height:40px}
 #journal-images figure>button{font-size:var(--review-label);padding:8px 12px}
+
+#journal-condition-log{margin:16px 0;padding:14px;border:1px solid #263348;border-radius:8px}#journal-condition-log summary,#journal-trade-condition-entries summary{cursor:pointer}#journal-condition-entries>details,#journal-trade-condition-entries>div>details{padding:12px;margin:8px 0;background:#111a28;border-radius:6px;font-size:12px;overflow-wrap:anywhere}#journal-condition-log p,#journal-trade-condition-entries p{font-size:12px;line-height:1.6}
