@@ -83,6 +83,7 @@ setInterval(pollLevels, 5000);
 
 function showAccount(account) {
   window.journalConnectedAccount=account;
+  if(account.path){try{localStorage.setItem('tradetrace.mt5-path',account.path);}catch(_){/* Connection still works without browser storage. */}}
   currency=account.currency;connected=true;
   $('account').textContent=`${account.server} · Account ${account.account} · ${account.currency}`;
   for(const stage of ['terminal','connector','account'])check(stage,'passed');
@@ -121,11 +122,12 @@ async function restoreSession() {
     keyState(Boolean(session.key_saved));
     if(session.native_url)$('native-url').value=session.native_url;
     if(session.key_error){$('connection-settings').open=true;status(session.key_error);}
-    if(!session.connected)return;
+    if(!session.connected){await connectSession();return;}
     showAccount(session);directConnected=session.direct;
     await loadHistory();
     if(directConnected)applyLevels(await api('sync-levels',{}));
     status(directConnected?'Connection restored. Choose a trade to replay.':'Trades loaded. Add your API key in Connection settings for complete SL/TP.');
   });
 }
-restoreSession();
+try{const savedPath=localStorage.getItem('tradetrace.mt5-path');if(savedPath&&!$('path').value)$('path').value=savedPath;}catch(_){/* Optional preference. */}
+window.mt5Startup=restoreSession();

@@ -13,13 +13,23 @@ saved key, and run `Install.cmd` to create the environment at the new location.
 Run `CreateShortcut.ps1` to regenerate the launcher shortcut and replace any old
 pinned shortcut.
 
-## Market workspace (v1.14.0)
+## Market workspace (v1.15.0)
 
-Open **Terminal → Connect & load markets**. This connects to your running MT5
-terminal and loads symbols in one step; the native MCP history API key is not
-needed for charting. An existing connected session loads automatically when the
-Terminal tab opens. Live accounts support market analysis; execution remains
-restricted to demo accounts on the backend.
+The app automatically connects to the signed-in, running MT5 terminal on startup,
+using its last successful executable path when available, then loads broker
+symbols without clicking **Connect & load markets**. The journal and Terminal
+share startup connection work. Existing server sessions are reused; a fresh server
+also connects automatically. The native MCP history key is optional for charting.
+The last page, symbol, timeframe, indicators and drawings restore in this browser.
+If no page preference exists but terminal settings are saved, Terminal opens.
+
+If MT5 starts later, connection attempts retry at most every ten seconds while the
+Terminal page is visible. The button becomes **Reconnect MT5** after a successful
+load and remains available for manual recovery. Multiple running installations
+still require an unambiguous saved/selected terminal path. An account change while
+the app is running clears reviews and requires manual reconnection rather than
+silently switching trading accounts. Startup and reconnect never submit orders.
+Live accounts support analysis; execution remains restricted to demo accounts.
 
 - Locally bundled TradingView Lightweight Charts 5.0.9 provides candles/line view,
   crosshair OHLC, pan/zoom, price scaling, **Fit** history and **Latest** controls.

@@ -7,6 +7,7 @@
   let saved={};try{saved=JSON.parse(localStorage.getItem(storageKey)||'{}');if(!saved||typeof saved!=='object'||Array.isArray(saved))saved={};}catch(_){saved={};}
   const indicators=['sma','ema','bb','rsi','macd','volume-indicator'];
   let chart, main, overlays={}, primitive, priceLines=[], market=null, bars=[], symbols=[], quotes={}, scope='offline';
+  let nextAutoConnect=0,autoReconnectBlocked=false;
   let loading=false, connecting=false, running=false, revision=0, ticketRevision=0, preview=null, submitting=false, reviewing=false, tool='cursor', pending=null, lastChartKey='', expiryTimer;
   let state={watch:[],drawings:{},alerts:[],views:{}};
   let orderDrag=null,editingOrder=null,draftPriceLines=[],draftSymbol='';
@@ -386,9 +387,10 @@
   el('alert-form').onsubmit=event=>{event.preventDefault();if(!market)return;const price=Number(el('alert-price').value);if(!Number.isFinite(price)||price<=0)return;if(state.alerts.length>=20){status('Remove an alert before adding another (maximum 20).');return;}state.alerts.push({id:crypto.randomUUID(),symbol:el('symbol').value,price,direction:el('alert-direction').value,fired:null});persist();renderAlerts();};
   function checkAlerts(){let changed=false;for(const alert of state.alerts){const quote=quotes[alert.symbol];if(alert.fired||!quote||Date.now()/1000-quote.time>30||quote.time>Date.now()/1000+5)continue;if(alert.direction==='above'?quote.bid>=alert.price:quote.bid<=alert.price){alert.fired=Date.now();changed=true;}}if(changed){persist();renderAlerts();}}
   async function connectWorkspace(auto=false){
-    if(connecting)return;connecting=true;el('start').disabled=true;
+    if(connecting||(auto&&autoReconnectBlocked))return;connecting=true;nextAutoConnect=Date.now()+10000;el('start').disabled=true;el('start').textContent='Connecting…';if(!auto)autoReconnectBlocked=false;
     try{
-      if(!auto){status('Connecting to your running MT5 terminal…');const session=await call('session');if(!session.connected){const account=await call('connect',{path:document.getElementById('path').value||document.getElementById('terminals').value});if(typeof showAccount==='function')showAccount(account);}}
+      if(auto&&window.mt5Startup)await window.mt5Startup;
+      status('Connecting to your running MT5 terminal…');const session=await call('session');if(!session.connected){const account=await call('connect',{path:document.getElementById('path').value||document.getElementById('terminals').value});if(typeof showAccount==='function')showAccount(account);}
       const data=await call('terminal/symbols');const nextScope=JSON.stringify([data.server,data.account]);
       if(scope!==nextScope){invalidate();scope=nextScope;const source=saved.workspaces?.[scope]||{};state={watch:safeList(source.watch).filter(s=>typeof s==='string').slice(0,20),drawings:source.drawings&&typeof source.drawings==='object'?source.drawings:{},alerts:safeList(source.alerts).filter(a=>a&&typeof a.symbol==='string'&&Number.isFinite(a.price)).slice(0,20),views:source.views&&typeof source.views==='object'?source.views:{}};state.drawings=A.shareDrawingTimeframes(state.drawings,scope);quotes={};}
       symbols=data.symbols;el('symbol').replaceChildren(...symbols.map(name=>new Option(name,name)));el('symbol').disabled=!symbols.length;
@@ -396,7 +398,7 @@
       if(!state.watch.length)state.watch=(data.visible?.length?data.visible:symbols).slice(0,6);state.watch=state.watch.filter(s=>symbols.includes(s));
       applyLayout(saved.settings);if(!el('symbol').value)el('symbol').value=state.watch[0]||symbols[0];
       renderWatchlist();renderAlerts();running=true;selectionChanged();
-    }catch(error){if(!auto)status(error.message);}finally{connecting=false;el('start').disabled=false;}
+    }catch(error){el('feed').textContent='Waiting for MT5';status(error.message+(auto?' · Will retry automatically.':''));}finally{connecting=false;el('start').disabled=false;el('start').textContent=running?'Reconnect MT5':'Connect & load markets';}
   }
   async function refresh(){
     if(loading||!running||drawingDrag||orderDrag||el('pane').hidden||document.hidden)return;
@@ -404,7 +406,7 @@
     try{
       const symbol=el('symbol').value,timeframe=el('timeframe').value;
       const next=await call('terminal/market',{symbol,timeframe});if(version!==revision||drawingDrag||orderDrag)return;
-      if(JSON.stringify([next.server,next.account])!==scope){running=false;clearMarket();throw Error('MT5 account changed. Connect again to load its workspace.');}
+      if(JSON.stringify([next.server,next.account])!==scope){autoReconnectBlocked=true;running=false;clearMarket();throw Error('MT5 account changed. Connect again to load its workspace.');}
       market=next;bars=next.bars.map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4],volume:b[5]||0}));
       const stale=Date.now()/1000-next.quote_time>30;
       el('feed').textContent=stale?'Last available quotes':next.demo?'Demo · connected':'Live · analysis';el('feed').classList.toggle('online',!stale);
@@ -424,7 +426,7 @@
       updateTicket();renderMarket();status(stale?'Market is quiet or closed. Showing the latest available broker candles.':`${symbol} · ${bars.length} broker candles · ${next.interval_note||'Drawings and layouts save locally'}`);
       const quoteSymbols=[...new Set([...state.watch,...state.alerts.filter(a=>!a.fired).map(a=>a.symbol)])];
       if(quoteSymbols.length){try{const result=await call('terminal/quotes',{symbols:quoteSymbols});if(version===revision){if(JSON.stringify([result.server,result.account])!==scope)throw Error('Account changed. Reconnect MT5.');quotes=result.quotes;renderWatchlist();checkAlerts();}}catch(error){if(version===revision)status('Chart loaded; watchlist quotes unavailable: '+error.message);}}
-    }catch(error){if(version===revision){el('feed').textContent='Disconnected';el('feed').classList.remove('online');status(error.message);market=null;invalidate();}}
+    }catch(error){if(version===revision){el('feed').textContent='Disconnected';el('feed').classList.remove('online');status(error.message);running=false;nextAutoConnect=Date.now()+10000;market=null;invalidate();}}
     finally{loading=false;if(version!==revision)refresh();}
   }
   el('start').onclick=()=>connectWorkspace();
@@ -522,5 +524,6 @@
   buildChart();setTool('cursor');
   new MutationObserver(()=>{if(!el('pane').hidden){if(!running)connectWorkspace(true);else refresh();}}).observe(el('pane'),{attributes:true,attributeFilter:['hidden']});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
-  setInterval(refresh,2000);
+  window.addEventListener('DOMContentLoaded',()=>connectWorkspace(true));
+  setInterval(()=>{if(!running&&!connecting&&!autoReconnectBlocked&&!document.hidden&&!el('pane').hidden&&Date.now()>=nextAutoConnect)connectWorkspace(true);else refresh();},2000);
 })();

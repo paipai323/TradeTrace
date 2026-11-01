@@ -89,6 +89,7 @@ function showJournalView(view){
   }
   snapshotReplay();
   journalView=view;
+  try{localStorage.setItem('tradetrace.last-view',view);}catch(_){/* Navigation remains available. */}
   $('terminal-pane').hidden=view!=='terminal';
   $('journal-pane').hidden=view==='replay'||view==='terminal';$('replay-pane').hidden=view!=='replay';$('calendar-panel').hidden=view!=='calendar';
   for(const name of ['journal','calendar','replay','terminal'])$('nav-'+name).classList.toggle('selected',name===view);
@@ -342,3 +343,7 @@ $('journal-backup').onclick=async()=>{
 };
 window.addEventListener('beforeunload',event=>{if(journalDirty&&!persistDraftLocally()&&!draftIsSafe()){event.preventDefault();event.returnValue='';}});
 refreshJournal().catch(error=>status(error.message));
+
+window.addEventListener('DOMContentLoaded',()=>{
+  try{const savedView=localStorage.getItem('tradetrace.last-view')||(localStorage.getItem('tradetrace.terminal.v2')?'terminal':'journal');if(['journal','calendar','replay','terminal'].includes(savedView))showJournalView(savedView);}catch(_){/* Keep the initial journal view. */}
+});
