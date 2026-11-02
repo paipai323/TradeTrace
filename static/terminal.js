@@ -103,6 +103,7 @@
   applyLayout(saved.settings);
   function invalidate(clear=true){ticketRevision++;preview=null;clearTimeout(expiryTimer);el('submit').hidden=true;if(clear)el('order-summary').replaceChildren();updateTicket();}
   function updateTicket(){
+    renderMonitorList();
     el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;
     el('condition-start').disabled=!conditionDraftValid||conditionBusy||submitting||reviewing||closing;
     renderConditionComparison();
@@ -239,8 +240,10 @@
       grip.disabled=!!editingPosition&&item.field==='order-price';
       let label=item.add?item.title:item.field==='order-price'?`${el('side').value} ${el('order-kind').value==='MARKET'?'Market':inferredKind()||'Pending'} @ ${price} · ${sizing}`:`${item.title} @ ${price}`;
       if(!item.add&&item.field!=='order-price'&&Number.isFinite(ticketEstimate?.[item.field])&&!(autoDraftSizing()&&ticketEstimateError))label=`${item.field.toUpperCase()} @ ${price} · ${estimateMoney(ticketEstimate[item.field],ticketEstimate.currency)}`;
+      const rr=draftRiskReward();if(!item.add&&item.field==='order-price'&&rr!==null)label+=` · RR 1:${rr.toFixed(2)}`;
       if(grip.textContent!==label)grip.textContent=label;
       grip.title=item.add?'Drag to add '+(item.field==='sl'?'stop loss':'take profit'):'Drag to change '+item.title.toLowerCase();grip.dataset.ticketAdd=item.add?item.field:'';if(!item.add&&item.field!=='order-price')grip.title+=` · Price ${item.price.toFixed(market.digits)} · Estimated gross P/L; excludes fees${ticketEstimate?.key!==ticketEstimateKey?' · Updating estimate':''}`;
+      if(!item.add&&item.field==='order-price'&&rr!==null)grip.title+=' · Risk/reward by entry-to-SL/TP price distances; excludes fees and slippage';
       if(!item.add&&item.field==='order-price'&&autoDraftSizing()&&ticketEstimateError)grip.title+=' · '+ticketEstimateError;
       node.lastChild.hidden=item.add;node.lastChild.title=item.field==='order-price'?'Dismiss draft (no broker order changed)':'Remove '+(item.field==='sl'?'stop loss':'take profit');node.lastChild.setAttribute('aria-label',item.field==='order-price'?'Dismiss order draft':'Remove '+(item.field==='sl'?'stop loss':'take profit'));
       node.style.left=Math.max(0,Math.min(item.left,size.width-node.offsetWidth-4))+'px';
@@ -252,6 +255,11 @@
     const body={symbol:el('symbol').value,side:el('side').value,entry:entryReference(),volume:Number(el('volume').value),sl:Number(el('sl').value),tp:Number(el('tp').value)};
     if(autoDraftSizing()){body.risk_auto=true;body.volume=market.volume_min;body.equity=market.equity;if(!body.sl)return null;}
     return Object.values(body).filter(v=>typeof v==='number').every(Number.isFinite)&&body.entry>0&&body.volume>0&&body.sl>=0&&body.tp>=0&&(body.sl||body.tp)?body:null;
+  }
+  function draftRiskReward(){
+    const entry=entryReference(),sl=Number(el('sl').value),tp=Number(el('tp').value),direction=el('side').value==='BUY'?1:-1;
+    if(![entry,sl,tp].every(value=>Number.isFinite(value)&&value>0))return null;
+    const risk=direction*(entry-sl),reward=direction*(tp-entry);return risk>0&&reward>0?reward/risk:null;
   }
   function estimateMoney(value,currency){return `${value>=0?'+':'−'}${Math.abs(value).toFixed(2)} ${currency}`;}
   function renderTicketEstimate(){
@@ -265,7 +273,7 @@
     });
     const sizing=body.risk_auto&&ticketEstimate?.auto_volume?`2% equity · ${ticketEstimate.auto_volume} lots · Budget ${ticketEstimate.risk_budget.toFixed(2)} ${ticketEstimate.currency} · Modeled risk ${ticketEstimate.modeled_risk.toFixed(2)} ${ticketEstimate.currency}. `:'';
     node.title=stale?'Updating · showing the last completed estimate':'';
-    show(ticketEstimate?`${sizing}Est. ${parts.join(' · ')}${ticketEstimateError?' · '+ticketEstimateError+' (previous estimate)':''}. Excludes commission, swap and slippage.`:ticketEstimateError||'Estimating SL / TP amounts…');
+    show(ticketEstimate?`${sizing}Est. ${parts.join(' · ')}${draftRiskReward()!==null?' · RR 1:'+draftRiskReward().toFixed(2):''}${ticketEstimateError?' · '+ticketEstimateError+' (previous estimate)':''}. Excludes commission, swap and slippage.`:ticketEstimateError||'Estimating SL / TP amounts…');
   }
   function queueTicketEstimate(){
     const automatic=autoDraftSizing();el('volume').disabled=automatic||!!editingPosition||!!editingOrder;
@@ -705,7 +713,7 @@
   const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
   function detachConditions(message){serverStateKey='' ;if(serverMonitorActive()){conditionMessage(`${serverMonitor.symbol} · server monitoring continues. Reconnecting the display does not stop it.`);return;}conditionRun=null;if(conditionApplied?.state==='running')conditionApplied.state='stopped';if(el('condition-status'))conditionMessage(conditionFinished||message);renderConditionProgress();}
   function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high','sensitivity'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
-  function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
+  function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
   function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
     const row=text('div','','terminal-condition-row');row.dataset.visible=String(value.visible!==false);row.dataset.conditionId=typeof value.id==='string'&&value.id&&!([...el('condition-list').children].some(item=>item.dataset.conditionId===value.id))?value.id:crypto.randomUUID();
     const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);const badge=text('span','Draft','terminal-condition-progress');badge.dataset.progress='draft';badge.setAttribute('aria-label','Condition progress');const duplicate=text('button','⧉','terminal-condition-duplicate');duplicate.type='button';duplicate.title='Duplicate condition';duplicate.setAttribute('aria-label','Duplicate condition');duplicate.onclick=event=>{event.stopPropagation();duplicateCondition(row);};header.append(summary,badge,duplicate);row.append(header,editor);
@@ -732,7 +740,7 @@
     selectedConditionRow=null;conditionPick=null;
     el('condition-show-levels').checked=value.showLevels!==false;el('condition-show-zones').checked=value.showZones!==false;
     el('condition-list').replaceChildren();el('condition-action').value='ALERT';
-    el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(value.autoPlan);setInvalidation(value.invalidation);
+    el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(value.autoPlan);setInvalidation(value.invalidation);setMonitorSettings(value.monitoring);
     for(const name of ['timeout','gap'])el('condition-'+name).value=Number.isFinite(Number(value[name]))&&Number(value[name])>=0?value[name]:(name==='gap'?300:0);
     if(Array.isArray(value.rows))for(const row of value.rows)if(row&&typeof row==='object')conditionRow(row);
     resetConditionUndo();renderConditionValidation();if(conditionEvents.length)logConditionEvent('Restored','Saved draft restored. Monitoring was not resumed.');
@@ -742,18 +750,27 @@
   for(const name of ['sizing','timeout','gap'])el('condition-'+name).addEventListener('change',saveConditions);
   for(const name of ['timeout','gap'])el('condition-'+name).addEventListener('input',renderConditionValidation);
   el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;invalidate();syncDraftLines();});
-  el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';if(serverMonitorActive())stopServerConditions('Stopped: entry mode changed. Start to apply your draft.');renderConditionComparison();};
+  el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';renderConditionComparison();};
   el('conditions-panel').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT')event.preventDefault();});
-  let serverMonitor=null,serverPollBusy=false,serverReviewShown='',serverStateKey='',serverDetachedId='';
+  let serverRegistryId='',serverSnapshotRevision=-1,serverMonitors=[],selectedMonitorId=null,serverMonitor=null,serverPollBusy=false,serverReviewShown='',serverStateKey='',serverDetachedId='';
   function serverMonitorActive(){return !!serverMonitor&&['running','review','finishing'].includes(serverMonitor.phase);}
   function receiveServerConditions(payload){
-    const run=payload.run;
+    if(payload.registry_id){
+      if(payload.registry_id===serverRegistryId&&payload.snapshot_revision<serverSnapshotRevision)return;
+      if(serverRegistryId&&payload.registry_id!==serverRegistryId){serverMonitors=[];serverMonitor=null;selectedMonitorId=null;serverStateKey='';invalidate();}
+      serverRegistryId=payload.registry_id;serverSnapshotRevision=payload.snapshot_revision;
+    }
+    if(Array.isArray(payload.runs))serverMonitors=payload.runs;
+    else if(payload.run){const index=serverMonitors.findIndex(r=>r.id===payload.run.id);if(index<0)serverMonitors.push(payload.run);else serverMonitors[index]=payload.run;}
+    if(selectedMonitorId===null&&payload.run)selectedMonitorId=payload.run.id;
+    const run=selectedMonitorId===null?payload.run:serverMonitors.find(r=>r.id===selectedMonitorId)||null;
+    renderMonitorList();
     // Runs remain in server memory after Stop/finish. An empty reply arriving
     // after a Start response belongs to an earlier poll, not a stopped setup.
-    if(!run&&serverMonitor)return;
-    if(run&&serverMonitor&&(run.generation<serverMonitor.generation||run.generation===serverMonitor.generation&&run.revision<serverMonitor.revision))return;
+    if(!run&&serverMonitor&&!Array.isArray(payload.runs))return;
+    if(run&&serverMonitor&&run.id===serverMonitor.id&&(run.generation<serverMonitor.generation||run.generation===serverMonitor.generation&&run.revision<serverMonitor.revision))return;
     serverMonitor=run||null;
-    if(!run){conditionRun=null;conditionBusy=false;if(conditionApplied?.state==='running'){conditionApplied.state='stopped';conditionMessage('Server has no active setup. Review and Start explicitly.');}updateTicket();return;}
+    if(!run){conditionRun=null;if(conditionApplied?.state==='running'){conditionApplied.state='stopped';conditionMessage('Server has no active setup. Review and Start explicitly.');}updateTicket();return;}
     const active=serverMonitorActive(),same=run.scope===scope&&run.symbol===el('symbol').value&&run.id!==serverDetachedId;
     if(run.id===serverDetachedId&&!active){conditionRun=null;updateTicket();return;}
     conditionRun=active?{...run,sequence:{rows:run.rows,index:run.applied.index,structureState:run.structureState}}:null;
@@ -790,12 +807,12 @@
   }
   async function pollServerConditions(){
     if(serverPollBusy)return;serverPollBusy=true;
-    try{receiveServerConditions(await call('terminal/conditions/status',{}));}
+    try{receiveServerConditions(await call('terminal/conditions/status',selectedMonitorId?{id:selectedMonitorId}:{}));}
     catch(error){if(serverMonitorActive())conditionMessage('Server status unavailable. Monitoring status is unknown; verify the TradeTrace server and MT5. '+error.message);}
     finally{serverPollBusy=false;}
   }
   async function stopServerConditions(reason='Stopped by user. Already submitted orders remain in MT5.'){
-    const id=serverMonitor?.id;
+    const id=serverMonitor?.id;if(!id)return true;
     try{const result=await call('terminal/conditions/stop',{id,reason});receiveServerConditions(result);if(result.run&&['running','review','finishing'].includes(result.run.phase)){conditionMessage('A different server setup is active. Stop it before clearing this draft.');return false;}return true;}
     catch(error){conditionMessage('Stop not confirmed. The server may still be monitoring. Check the server and retry Stop. '+error.message);return false;}
   }
@@ -807,9 +824,10 @@
       if(!market)throw Error('Connect MT5 first.');
       const checks=setupReadiness(),blocked=checks.find(item=>item.state==='blocked');if(blocked)throw Error(blocked.message);
       const rows=C.validate(conditionRows()),settings=conditionComparisonSettings();
+      if(readMonitorSettings().group_policy==='FIRST_ENTRY'&&!readMonitorSettings().group)throw Error('Name a linked group for first-entry cancellation.');
       conditionBusy=true;updateTicket();invalidate();
-      const result=await call('terminal/conditions/start',{request_id:crypto.randomUUID(),symbol:el('symbol').value,expected_account:market.account,expected_server:market.server,rows,settings});
-      conditionFinished='';serverStateKey='';receiveServerConditions(result);
+      const result=await call('terminal/conditions/start',{request_id:crypto.randomUUID(),multiple:true,replace_id:serverMonitor?.scope===scope&&serverMonitor.symbol===el('symbol').value&&serverMonitor.id!==serverDetachedId?serverMonitor.id:null,...readMonitorSettings(),symbol:el('symbol').value,expected_account:market.account,expected_server:market.server,rows,settings});
+      conditionFinished='';serverStateKey='';selectedMonitorId=result.run?.id||selectedMonitorId;serverDetachedId='';receiveServerConditions(result);
     }catch(error){logConditionEvent('Start blocked',error.message);conditionMessage('Start not confirmed: '+error.message);await pollServerConditions();}
     finally{conditionBusy=false;updateTicket();}
   };
@@ -999,7 +1017,7 @@
     finishConditionDrag(true);conditionPick=null;
     if(conditionFinished)conditionLastResult=conditionFinished;
     conditionFinished='';conditionRun=null;conditionApplied=null;selectedConditionRow=null;el('condition-list').replaceChildren();
-    el('condition-action').value='ALERT';setAutoPlan();setInvalidation();el('condition-start').textContent='Start conditions';
+    el('condition-action').value='ALERT';setAutoPlan();setInvalidation();setMonitorSettings();el('condition-start').textContent='Start conditions';
     endOrderEdit();dismissTicketDraft();el('volume').value=market?.volume_min||.01;
     logConditionEvent('New draft','New setup draft created. Monitoring stopped and automatic entry is off.');
     conditionMessage('Draft. Configure conditions and order, then Start.');
@@ -1142,13 +1160,13 @@
 
   let conditionComparisonKey='';
   function conditionComparisonSettings(){
-    return {action:el('condition-action').value,sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,ticket:Object.fromEntries(['side','order-kind','order-price','volume','sl','tp'].map(name=>[name,el(name).value]))};
+    return {action:el('condition-action').value,sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,ticket:Object.fromEntries(['side','order-kind','order-price','volume','sl','tp'].map(name=>[name,el(name).value]))};
   }
   function comparisonPrice(value){const n=Number(value);return Number.isFinite(n)&&n>0?n.toLocaleString('en-US',{maximumFractionDigits:8}):'Not set';}
   function comparisonSettings(settings){
     if(!settings)return null;const ticket=settings.ticket||{};
     const timing=(value,unit)=>value===''||!Number.isFinite(Number(value))||Number(value)<0?'Invalid':Number(value)===0?'Off':`${Number(value)} ${unit}`;
-    const result={action:{ALERT:'Alerts only',REVIEW:'Prepare for review',AUTO:'Automatic entry'}[settings.action]||'Not set',sizing:settings.sizing==='AUTO'?'2% equity':'Manual lots',side:ticket.side||'Not set',kind:ticket['order-kind']==='PENDING'?'Pending':'Market',entry:ticket['order-kind']==='PENDING'?comparisonPrice(ticket['order-price']):'Market quote',volume:settings.sizing==='AUTO'?'Auto (2% equity)':comparisonPrice(ticket.volume),sl:comparisonPrice(ticket.sl),tp:comparisonPrice(ticket.tp),timeout:timing(settings.timeout,'min'),gap:timing(settings.gap,'s'),invalidation:invalidationDescription(settings.invalidation),plan:settings.autoPlan?.enabled?`${settings.autoPlan.entry} · ${settings.autoPlan.timeframe} swing ${settings.autoPlan.sensitivity} · buffer ${settings.autoPlan.buffer} ticks · ${settings.autoPlan.rr}R · ${settings.autoPlan.risk}% risk · expiry ${settings.autoPlan.expiry} min`:'Off'};
+    const result={action:{ALERT:'Alerts only',REVIEW:'Prepare for review',AUTO:'Automatic entry'}[settings.action]||'Not set',sizing:settings.sizing==='AUTO'?'2% equity':'Manual lots',side:ticket.side||'Not set',kind:ticket['order-kind']==='PENDING'?'Pending':'Market',entry:ticket['order-kind']==='PENDING'?comparisonPrice(ticket['order-price']):'Market quote',volume:settings.sizing==='AUTO'?'Auto (2% equity)':comparisonPrice(ticket.volume),sl:comparisonPrice(ticket.sl),tp:comparisonPrice(ticket.tp),timeout:timing(settings.timeout,'min'),gap:timing(settings.gap,'s'),invalidation:invalidationDescription(settings.invalidation),monitoring:settings.monitoring?`${settings.monitoring.name||'Automatic name'} · ${settings.monitoring.group||'No linked group'} · ${settings.monitoring.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`:'Independent setup',plan:settings.autoPlan?.enabled?`${settings.autoPlan.entry} · ${settings.autoPlan.timeframe} swing ${settings.autoPlan.sensitivity} · buffer ${settings.autoPlan.buffer} ticks · ${settings.autoPlan.rr}R · ${settings.autoPlan.risk}% risk · expiry ${settings.autoPlan.expiry} min`:'Off'};
     if(settings.autoPlan?.enabled){const plan=settings.autoPlan;Object.assign(result,{sizing:`Automatic ${plan.risk}% equity`,kind:plan.entry==='RETEST'?'Retest limit':'Market',entry:plan.entry==='RETEST'?'Matching BOS/MS break':'Market quote at completion',volume:'Calculate at completion',sl:`${plan.timeframe} confirmed swing + ${plan.buffer} ticks`,tp:`${plan.rr}R price distance`});}
     return result;
   }
@@ -1192,7 +1210,7 @@
     if(applied&&!appliedSettings){el('condition-comparison-settings-note').textContent='This older setup has no saved order/timing snapshot. Start a new run to capture one.';return;}
     el('condition-comparison-settings-note').textContent='Order and timing settings from Start. Order fields are inactive in alerts-only mode.';
     const head=document.createElement('thead'),header=document.createElement('tr');for(const name of ['Setting','Applied','Draft'])header.append(text('th',name));head.append(header);table.append(head);
-    const body=document.createElement('tbody'),labels={action:'Action',sizing:'Sizing',side:'Side',kind:'Order',entry:'Entry',volume:'Lots',sl:'Stop loss',tp:'Take profit',timeout:'Timeout',gap:'Quote gap',plan:'Automatic plan',invalidation:'Invalidation'};
+    const body=document.createElement('tbody'),labels={action:'Action',sizing:'Sizing',side:'Side',kind:'Order',entry:'Entry',volume:'Lots',sl:'Stop loss',tp:'Take profit',timeout:'Timeout',gap:'Quote gap',plan:'Automatic plan',invalidation:'Invalidation',monitoring:'Monitoring'};
     for(const item of settings){const row=document.createElement('tr');row.dataset.setting=item.field;row.dataset.changed=String(item.changed);row.append(text('th',labels[item.field]),text('td',item.previous??'—'),text('td',item.value));body.append(row);}table.append(body);
   }
 
@@ -1238,7 +1256,7 @@
       serverDetachedId=serverMonitor?.id||'';if(!await stopBeforeDraft('Stopped: template load requested. Already submitted orders remain in MT5.')){templateMessage('Stop not confirmed. Draft unchanged. Check server status.');return false;}
       conditionHistoryTransaction('Load template',()=>{
         clearSetupDraft();
-        el('condition-sizing').value=settings.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(settings.autoPlan);setInvalidation(settings.invalidation?{...settings.invalidation,level:settings.invalidation.source==='LEVEL'?price(settings.invalidation.level):settings.invalidation.level}:undefined);
+        el('condition-sizing').value=settings.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(settings.autoPlan);setMonitorSettings(settings.monitoring);setInvalidation(settings.invalidation?{...settings.invalidation,level:settings.invalidation.source==='LEVEL'?price(settings.invalidation.level):settings.invalidation.level}:undefined);
         for(const name of ['timeout','gap'])el('condition-'+name).value=settings[name];
         el('side').value=ticket.side==='SELL'?'SELL':'BUY';el('order-kind').value=ticket['order-kind']==='PENDING'?'PENDING':'MARKET';
         el('volume').value=Number(ticket.volume)>0?Number(ticket.volume):market.volume_min;
@@ -1314,6 +1332,7 @@
   function setupReadiness(){
     const checks=[],add=(name,state,message)=>checks.push({name,state,message}),trade=el('condition-action').value!=='ALERT';
     const fresh=market&&Date.now()/1000-market.quote_time<=30&&market.quote_time<=Date.now()/1000+5;
+    const monitoring=readMonitorSettings();if(monitoring.group_policy==='FIRST_ENTRY'&&!monitoring.group)add('Linked setups','blocked','Name a linked group for first-entry cancellation.');
     add('Quotes',fresh?'ready':'blocked',!market?'Connect MT5 and load this market.':fresh?'Current broker quote available.':'Quote is stale. Wait for a fresh quote or reconnect.');
     const rows=conditionRows(),invalid=rows.map((row,index)=>Object.keys(C.fieldErrors(row)).length?index+1:0).filter(Boolean);
     add('Conditions',conditionDraftValid?'ready':'blocked',invalid.length?`Fix highlighted fields in condition ${invalid.join(', ')}.`:!conditionDraftValid?'Fix timeout or quote-gap settings.':rows.length?`${rows.length} valid condition${rows.length===1?'':'s'}, in order.`:'No conditions: Start acts immediately.');
@@ -1395,6 +1414,50 @@
   }
   renderAutoPlanControls();
 
+
+  function readMonitorSettings(){return {name:el('monitor-name').value.trim(),group:el('monitor-group').value.trim(),group_policy:el('monitor-policy').value};}
+  function setMonitorSettings(value={}){el('monitor-name').value=value.name||'';el('monitor-group').value=value.group||'';el('monitor-policy').value=value.group_policy==='FIRST_ENTRY'?'FIRST_ENTRY':'ALL';}
+  function renderMonitorList(){
+    const active=serverMonitors.filter(r=>['running','review','finishing'].includes(r.phase));el('monitor-count').textContent=`${active.length} active`;
+    el('monitor-stop-all').disabled=!active.length;el('monitor-add').disabled=conditionBusy||submitting||reviewing||closing;
+    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing]));
+    if(el('monitor-list').dataset.key===key)return;el('monitor-list').dataset.key=key;
+    const cards=serverMonitors.slice().reverse().map(run=>{
+      const card=text('article','','terminal-monitor-card');card.dataset.monitorId=run.id;card.dataset.selected=String(run.id===selectedMonitorId);
+      card.append(text('strong',run.name||`${run.symbol} setup`),text('span',`${run.symbol} · ${run.settings.ticket.side} · ${run.action} · ${run.phase} · ${run.applied.index}/${run.rows.length}`,'terminal-monitor-meta'));
+      if(run.group)card.append(text('span',`${run.group} · ${run.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`,'terminal-monitor-meta'));
+      card.append(text('p',run.message));const actions=document.createElement('div'),open=text('button',run.phase==='review'?'Open review':'Open setup'),stop=text('button','Stop');open.type=stop.type='button';
+      open.disabled=run.scope!==scope||conditionBusy||submitting||reviewing||closing;open.onclick=()=>openMonitoredSetup(run.id);
+      stop.disabled=!['running','review','finishing'].includes(run.phase);stop.onclick=async()=>{try{receiveServerConditions(await call('terminal/conditions/stop',{id:run.id}));}catch(error){conditionMessage('Stop not confirmed: '+error.message);}};
+      actions.append(open,stop);card.append(actions);return card;
+    });
+    if(!cards.length)cards.push(text('p','No server setups yet. Configure a draft and click Start.','terminal-muted'));el('monitor-list').replaceChildren(...cards);
+  }
+  async function openMonitoredSetup(id){
+    let run=serverMonitors.find(r=>r.id===id);if(!run||run.scope!==scope||conditionBusy||submitting||reviewing||closing)return;
+    conditionBusy=true;updateTicket();
+    try{
+      if(el('symbol').value!==run.symbol){el('symbol').value=run.symbol;selectionChanged();const until=Date.now()+10000;while(!market&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,100));if(!market)throw Error('Chart is still loading. Try opening the setup again.');}
+      if(run.scope!==scope||el('symbol').value!==run.symbol)throw Error('Account or symbol changed while opening the setup. Try again.');
+      run=serverMonitors.find(r=>r.id===id);if(!run)throw Error('Setup no longer exists.');
+      invalidate();selectedMonitorId=id;serverMonitor=null;serverStateKey='';serverDetachedId='';serverReviewShown='';conditionFinished='';conditionApplied=null;
+      const settings=run.settings,ticket=settings.ticket;conditionHistorySuspended=true;el('condition-list').replaceChildren();
+      for(const row of run.rows)conditionRow(row);
+      setAutoPlan(settings.autoPlan);setInvalidation(settings.invalidation);setMonitorSettings({name:run.name,group:run.group,group_policy:run.group_policy});
+      for(const name of ['sizing','timeout','gap','action'])el('condition-'+name).value=settings[name];
+      for(const name of ['side','order-kind','order-price','volume','sl','tp'])el(name).value=ticket[name]??'';
+      conditionHistorySuspended=false;resetConditionUndo();saveConditions();updateOrderHint();syncDraftLines();selectSetupTab('conditions');
+      receiveServerConditions({run,runs:serverMonitors});
+    }catch(error){conditionHistorySuspended=false;conditionMessage(error.message);}
+    finally{conditionBusy=false;updateTicket();}
+  }
+  el('monitor-add').onclick=()=>{
+    if(conditionBusy||submitting||reviewing||closing)return;
+    invalidate();selectedMonitorId='';serverMonitor=null;serverStateKey='';serverDetachedId='';serverReviewShown='';clearSetupDraft();renderMonitorList();
+    conditionMessage('Independent draft. Existing monitors continue. Configure this setup, then Start.');
+  };
+  el('monitor-stop-all').onclick=async()=>{try{receiveServerConditions(await call('terminal/conditions/stop',{all:true,reason:'Stopped: Stop all requested. Broker orders remain unchanged.'}));}catch(error){conditionMessage('Stop all not confirmed: '+error.message);}};
+  for(const name of ['name','group','policy'])el('monitor-'+name).addEventListener(name==='policy'?'change':'input',()=>{saveConditions();});
 
   function readInvalidation(){
     const value={enabled:el('invalidation-enabled').checked,visible:el('invalidation-visible').checked};

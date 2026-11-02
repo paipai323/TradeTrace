@@ -460,10 +460,12 @@ class Terminal:
         if closing and any(request.get(field)!=preview['request'].get(field) for field in ('position','symbol','type','volume')):
             raise ValueError('Position changed since review. Review the remaining position again.')
         if preview['body'].get('condition_entry'):
-            key = (account.login, account.server, request['symbol'])
+            monitor_id=preview['body'].get('condition_monitor_id')
+            if monitor_id is not None and (not isinstance(monitor_id,str) or len(monitor_id)!=32):raise ValueError('Invalid condition monitor identifier.')
+            key = (account.login, account.server, request['symbol'],monitor_id) if monitor_id else (account.login, account.server, request['symbol'])
             now = time.monotonic()
             if now - self.condition_attempts.get(key, -float('inf')) < 60:
-                raise ValueError('A condition entry was attempted for this symbol in the last 60 seconds. Check MT5.')
+                raise ValueError('This condition setup attempted an entry in the last 60 seconds. Check MT5.')
             self.condition_attempts[key] = now
         result = self.bridge.mt.order_send(request)
         if result is None:

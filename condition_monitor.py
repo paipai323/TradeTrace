@@ -1,4 +1,4 @@
-"""One local, in-memory condition runner. Broker access is serialized with HTTP APIs."""
+"""Local, in-memory condition runners. Broker access is serialized with HTTP APIs."""
 import copy
 import hashlib
 import json
@@ -14,7 +14,7 @@ def closed(data):
     return [dict(time=b[0]/1000,open=b[1],high=b[2],low=b[3],close=b[4]) for b in data['bars'][:-1]]
 
 
-class ConditionMonitor:
+class ConditionRun:
     def __init__(self,terminal,lock,clock=time.time,interval=2):
         self.terminal=terminal;self.lock=lock;self.clock=clock;self.interval=interval;self.run=None;self.requests={};self.generation=0;self.shutdown=threading.Event();self.thread=None
 
@@ -227,7 +227,7 @@ class ConditionMonitor:
         settings=run['settings'];ticket=settings['ticket'];plan=settings.get('autoPlan') or {'enabled':False}
         body=dict(symbol=run['symbol'],side=ticket['side'],order_kind=ticket['order-kind'],price=ticket.get('order-price'),volume=ticket.get('volume'),sl=ticket.get('sl'),tp=ticket.get('tp'),
                   condition_entry=True,condition_invalidation=copy.deepcopy(run['invalidation']),expected_account=run['account'],expected_server=run['server'],condition_risk_auto=settings['sizing']=='AUTO',
-                  condition_setup=dict(started=run['started'],completed=int(self.clock()*1000),action=run['action'],rows=copy.deepcopy(run['rows']),settings=copy.deepcopy(settings),observations=copy.deepcopy(run['observations']),invalidation=copy.deepcopy(run['invalidation']),monitor='local server'))
+                  condition_monitor_id=run['id'],condition_setup=dict(monitor_id=run['id'],name=run.get('name',''),group=run.get('group',''),group_policy=run.get('group_policy','ALL'),started=run['started'],completed=int(self.clock()*1000),action=run['action'],rows=copy.deepcopy(run['rows']),settings=copy.deepcopy(settings),observations=copy.deepcopy(run['observations']),invalidation=copy.deepcopy(run['invalidation']),monitor='local server'))
         if plan.get('enabled'):
             candles=closed(self._market(plan['timeframe']));tracker=Structure(plan['sensitivity'])
             for bar in candles:tracker.push(bar)
@@ -265,3 +265,115 @@ class ConditionMonitor:
         if isinstance(error,ConditionInvalidated):self._check_invalidation(dict(bid=error.bid,quote_time=self.clock()));return
         run['review']=None;run['result']=copy.deepcopy(result)
         self._finish('Finished: '+(str(error)+' Check MT5. No automatic retry.' if error else f'broker {result["retcode"]}: {result["comment"]}. Check MT5 for final execution status.'))
+
+
+class ConditionMonitor:
+    """Registry of independent runners; all broker work shares one API lock."""
+    ACTIVE=('running','review','finishing')
+    def __init__(self,terminal,lock,clock=time.time,interval=2):
+        self.terminal=terminal;self.lock=lock;self.clock=clock;self.interval=interval
+        self.runners={};self.requests={};self.latest=None;self.generation=0;self.registry_id=secrets.token_hex(16);self.snapshot_revision=0
+        self.shutdown=threading.Event();self.thread=None
+
+    @property
+    def run(self):
+        runner=self.runners.get(self.latest)
+        return runner.run if runner else None
+
+    def launch(self):
+        if self.thread:return
+        self.thread=threading.Thread(target=self._loop,name='condition-monitors',daemon=True);self.thread.start()
+
+    def _loop(self):
+        while not self.shutdown.wait(self.interval):
+            with self.lock:self.tick()
+
+    def close(self):
+        self.shutdown.set();self.signal_stop({'all':True})
+        if self.thread:self.thread.join()
+        with self.lock:self.stop({'all':True,'reason':'Stopped: TradeTrace server is shutting down.'})
+
+    def status(self,body=None):
+        body=body or {};selected=body.get('id',self.latest)
+        runs=[runner.status()['run'] for runner in self.runners.values()]
+        self.snapshot_revision+=1
+        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision)
+
+    def start(self,body):
+        if self.shutdown.is_set():raise ValueError('The server is shutting down. No new setup was started.')
+        request_id=body.get('request_id')
+        fingerprint=hashlib.sha256(json.dumps(body,sort_keys=True,allow_nan=False).encode()).hexdigest()
+        if isinstance(request_id,str) and request_id in self.requests:
+            old,run_id=self.requests[request_id]
+            if old!=fingerprint:raise ValueError('Start request already used with different settings.')
+            return self.status({'id':run_id})
+        name=body.get('name','');group=body.get('group','');policy=body.get('group_policy','ALL')
+        if not isinstance(name,str) or len(name)>80 or not isinstance(group,str) or len(group)>60 or policy not in ('ALL','FIRST_ENTRY'):
+            raise ValueError('Use a setup name up to 80 characters and a group up to 60 characters.')
+        group=group.strip()
+        if policy=='FIRST_ENTRY' and not group:raise ValueError('Name a linked group for first-entry cancellation.')
+        replace=body.get('replace_id') if body.get('multiple') else self.latest
+        if replace and replace not in self.runners:raise ValueError('Setup no longer exists. Start a new independent draft.')
+        active=[runner for key,runner in self.runners.items() if key!=replace and runner.run['phase'] in self.ACTIVE]
+        if len(active)>=20:raise ValueError('Up to 20 setups can monitor at once. Stop a setup first.')
+        for runner in active:
+            run=runner.run
+            if group and (run['account'],run['server'],run['symbol'],run.get('group'))==(str(body.get('expected_account')),body.get('expected_server'),body.get('symbol'),group) and run.get('group_policy')!=policy:
+                raise ValueError('Linked setups on the same symbol must use the same group policy.')
+        # Validate/freeze the complete new setup before stopping a replaced runner.
+        runner=ConditionRun(self.terminal,self.lock,self.clock,self.interval);runner.start(body)
+        if replace:self.runners[replace].stop({'reason':'Stopped: replaced by an explicitly restarted setup.'})
+        self.generation+=1;run=runner.run;run.update(generation=self.generation,name=name.strip() or f'{run["symbol"]} {run["settings"]["ticket"]["side"]} #{self.generation}',group=group,group_policy=policy)
+        self.runners[run['id']]=runner;self.latest=run['id'];self.requests[request_id]=(fingerprint,run['id'])
+        # Bound completed history, without ever dropping an active setup.
+        for key in list(self.runners):
+            if len(self.runners)<=100:break
+            if key!=self.latest and self.runners[key].run['phase'] not in self.ACTIVE:del self.runners[key]
+        return self.status()
+
+    def _targets(self,body):
+        if body.get('all') or not body.get('id'):return list(self.runners.values())
+        runner=self.runners.get(body.get('id') or self.latest)
+        return [runner] if runner else []
+
+    def stop(self,body=None):
+        body=body or {}
+        for runner in self._targets(body):runner.stop({key:value for key,value in body.items() if key!='id'})
+        return self.status({'id':body.get('id') or self.latest})
+
+    def signal_stop(self,body):
+        # Iteration snapshot permits cancellation intent outside the API lock.
+        # An omitted id is also used by shutdown and must cancel every runner.
+        for runner in list(self.runners.values()):
+            if body.get('all') or not body.get('id') or runner.run['id']==body['id']:runner.signal_stop({})
+
+    def _stop_linked(self,winner,uncertain=False):
+        run=winner.run
+        if not run.get('group') or run.get('group_policy')!='FIRST_ENTRY':return
+        for runner in self.runners.values():
+            other=runner.run
+            if runner is not winner and (other['scope'],other['symbol'],other.get('group'))==(run['scope'],run['symbol'],run['group']):
+                runner.stop({'reason':f'Stopped: linked setup “{run["name"]}” '+('had an uncertain submission; check MT5.' if uncertain else 'submitted an entry. First entry stops this group.')})
+
+    def tick(self):
+        for runner in list(self.runners.values()):
+            if runner.run['phase'] not in self.ACTIVE:continue
+            try:runner.tick()
+            except Exception as error:runner._finish('Stopped: monitoring failed. '+str(error)+' Check MT5.','stopped')
+            result=runner.run.get('result')
+            if result and result.get('retcode') in (10008,10009,10010):self._stop_linked(runner)
+            elif runner.run.get('sent') and not result:self._stop_linked(runner,uncertain=True)
+
+    def _review_runner(self,body):
+        return next((runner for runner in self.runners.values() if runner.run['phase']=='review' and runner.run.get('review',{}).get('preview')==body.get('preview')),None)
+
+    def before_submission(self,body):
+        runner=self._review_runner(body)
+        if runner:runner.before_submission(body)
+
+    def record_submission(self,body,result=None,error=None):
+        runner=self._review_runner(body)
+        if not runner:return
+        runner.record_submission(body,result,error)
+        if result and result.get('retcode') in (10008,10009,10010):self._stop_linked(runner)
+        elif error and not isinstance(error,ConditionInvalidated):self._stop_linked(runner,uncertain=True)
