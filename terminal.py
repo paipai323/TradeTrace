@@ -1,3 +1,4 @@
+from entry_quality import check_quality
 """Local market workspace and single-use market order previews."""
 import hashlib
 import json
@@ -278,6 +279,17 @@ class Terminal:
             gap=quote-price if below else price-quote
             if gap<=0 or gap+info.trade_tick_size*1e-6<distance:
                 raise ValueError(f'{side} {kind} entry must be {"below" if below else "above"} the current {"ask" if side=="BUY" else "bid"}, respecting broker stop distance.')
+        if body.get('condition_entry'):
+            if (str(account.login), account.server) != (str(body.get('expected_account')), body.get('expected_server')):
+                raise ValueError('Condition account changed. Start again.')
+            guard=body.get('condition_invalidation') or {}
+            if not isinstance(guard,dict):raise ValueError('Invalid condition invalidation guard.')
+            if guard.get('enabled'):
+                level=guard.get('level');direction=guard.get('direction')
+                if not isinstance(level,(int,float)) or isinstance(level,bool) or not math.isfinite(level) or level<=0 or direction not in ('BELOW','ABOVE'):raise ValueError('Invalid condition cancellation level.')
+                if tick.bid<=level if direction=='BELOW' else tick.bid>=level:raise ConditionInvalidated(tick.bid)
+            quality=check_quality(body.get('condition_entry_quality'),price,sl,tp,side,info.point,not pending)
+            if quality is not None and isinstance(body.get('condition_setup'),dict):body['condition_setup']['entry_quality_result']=quality
         reference = price if pending else tick.bid if side == 'BUY' else tick.ask
         if side == 'BUY' and ((sl and sl >= reference-distance) or (tp and tp <= reference+distance)):
             raise ValueError('Buy SL must be below bid and TP above bid, respecting broker stop distance.')
@@ -298,14 +310,6 @@ class Terminal:
             request=dict(action=mt.TRADE_ACTION_MODIFY,order=pending_order.ticket,symbol=symbol,price=price,sl=sl,tp=tp,
                          type_time=pending_order.type_time,expiration=pending_order.time_expiration)
         if body.get('condition_entry'):
-            if (str(account.login), account.server) != (str(body.get('expected_account')), body.get('expected_server')):
-                raise ValueError('Condition account changed. Start again.')
-            guard=body.get('condition_invalidation') or {}
-            if not isinstance(guard,dict):raise ValueError('Invalid condition invalidation guard.')
-            if guard.get('enabled'):
-                level=guard.get('level');direction=guard.get('direction')
-                if not isinstance(level,(int,float)) or isinstance(level,bool) or not math.isfinite(level) or level<=0 or direction not in ('BELOW','ABOVE'):raise ValueError('Invalid condition cancellation level.')
-                if tick.bid<=level if direction=='BELOW' else tick.bid>=level:raise ConditionInvalidated(tick.bid)
             if not sl or not tp:
                 raise ValueError('Condition entries require SL and TP.')
             if body.get('condition_risk_auto'):

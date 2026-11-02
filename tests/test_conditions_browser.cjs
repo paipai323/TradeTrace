@@ -57,7 +57,7 @@ const journalAccount=JSON.stringify(['123','Test-Demo']);
     const endpoint=new URL(route.request().url()).pathname,body=route.request().postDataJSON()||{};
     try{const value=endpoint.startsWith('/api/terminal/conditions/')?await serverMonitor.handle(endpoint,body):await mockApi(endpoint,body);if(endpoint==='/api/terminal/submit')serverMonitor.submitted(body,value);await route.fulfill({contentType:'application/json',body:JSON.stringify(value)});}catch(error){await route.fulfill({status:400,contentType:'application/json',body:JSON.stringify({error:error.message})});}
   });
-  await page.goto(url);
+  await page.context().addInitScript(()=>localStorage.setItem('tradetrace.quickEditorOpen','true'));await page.goto(url);
   await page.locator('#nav-terminal').click();
   await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('EURUSD')&&document.querySelector('#terminal-chart-empty').hidden);
   await page.locator('#terminal-setup-tab-conditions').click();

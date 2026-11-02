@@ -366,3 +366,21 @@ Use **Conditions → Monitoring list → Add another setup** to create an indepe
 Optional **Linked setups** uses a group name and policy, frozen at Start. Groups match this account/server and exact symbol. Allow every setup to enter keeps them independent. First entry stops the others stops waiting siblings and removes their review tokens after an accepted broker submission, including a pending order. An uncertain submission outcome also stops siblings so you can check MT5. A rejected entry does not cancel other setups. It never cancels orders already submitted or closes positions. Multiple same-symbol reviews remain separate and require individual confirmation. Broker work is serialized, so a first-entry group cannot send two simultaneous successful entries from the same server. All members of a running group must use the same policy.
 
 Risk settings apply to each order, not a shared portfolio budget. Independent setups can submit together and combined exposure can exceed one setup's risk percentage. Account mode and broker rules determine whether opposite entries hedge, reduce or reverse an existing position.
+
+### Entry quality checks
+
+Enable **Conditions → Check entry distance and minimum RR**. Settings freeze at Start, persist in drafts/saved templates, and appear in Applied vs draft. Older setups and starters keep the checks off. These filters apply to condition orders; alerts and ordinary manual ticket orders retain their behavior. A failure ends the setup as **Skipped**, records the reason and never retries. It does not stop linked peers because no entry was submitted.
+
+**Maximum distance** uses price units (for gold, 5 means 5.00, not five ticks). Choose an applied condition as the reference. For a zone, distance is zero inside and otherwise measured from the nearest edge. A level uses its price; BOS/MS uses the break price observed when that applied step passed. The reference never follows later swings. Missing structure evidence skips the entry. Set distance to 0 to disable this check.
+
+**Minimum RR** uses entry-to-SL price risk and entry-to-TP price reward. An optional target price caps reward at the nearer of that level and the actual TP, useful for support/resistance such as 3875. It never moves TP or assumes extra reward past the order's target. Set target to 0 to use TP; set minimum RR to 0 to disable the ratio check. Market checks include the app's 20-point adverse-entry allowance; pending orders use their entry price. These are price ratios, excluding costs and actual slippage.
+
+Checks run during preparation, after preparation and again on the fresh submission quote, including confirmation of a review. A review that no longer passes is consumed and marked Skipped. Successful journal receipts include the evaluated quality metrics. Repositioning a saved template scales its optional target and distance along with the template's prices; inspect them before Start.
+
+### Setup builder
+
+Use **Build / edit setup** in the monitoring sidebar for a large three-step editor: **Conditions → Entry & risk → Review**. Choose a starter or saved template, set the conditions, choose BUY/SELL and risk/execution, then inspect the plain-language summary and readiness before explicitly starting. Next/Back, closing, changing views and chart picking do not arm monitoring or send orders. Prepared reviews still require the separate confirmation button.
+
+Simple view hides sensitivity, buffers, timing, cancellation/quality controls and linked-group configuration; the summary continues to show active advanced settings. Show advanced exposes these controls without resetting values. Starter controls collapse after loading so conditions remain in focus. Pick on chart closes the builder temporarily and preserves the draft; reopen Build / edit setup to continue. Escape and Back to chart close it without stopping monitors.
+
+The sidebar stays focused on monitors, with name, progress, risk/lots and cancellation price. Add another setup opens an independent draft in the builder. Open review opens the prepared order in its Review step. The optional **Quick order / classic editor** remains available and remembers whether it was expanded. It shares the same controls and draft as the builder, including manual position/pending-order amendments. There are no duplicate order inputs or alternate execution paths.

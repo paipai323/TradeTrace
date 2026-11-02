@@ -333,6 +333,7 @@
   }
   function beginOrderEdit(order){
     selectSetupTab('order');
+    if(!el('setup-builder').open)el('quick-editor').open=true;
     if(!market||submitting||closing||order.symbol!==el('symbol').value)return false;
     editingPosition=null;el('order-price').disabled=false;editingOrder={...order};if(smallPanels())el('pane').classList.add('mobile-ticket-open');else el('pane').classList.remove('ticket-collapsed');sizePanels();selectDrawing(-1);el('order-kind').value='PENDING';el('side').value=[2,4].includes(order.type)?'BUY':'SELL';
     el('order-price').value=order.price;el('sl').value=order.sl||'';el('tp').value=order.tp||'';el('volume').value=order.volume;
@@ -341,6 +342,7 @@
   }
   function beginPositionEdit(position){
     selectSetupTab('order');
+    if(!el('setup-builder').open)el('quick-editor').open=true;
     if(!market||submitting||closing||position.symbol!==el('symbol').value)return false;
     editingOrder=null;editingPosition={...position};if(smallPanels())el('pane').classList.add('mobile-ticket-open');else el('pane').classList.remove('ticket-collapsed');sizePanels();selectDrawing(-1);el('order-kind').value='MARKET';el('side').value=position.type===0?'BUY':'SELL';
     el('order-price').value=position.price_open;el('order-price').disabled=true;el('volume').value=position.volume;el('sl').value=position.sl||'';el('tp').value=position.tp||'';
@@ -709,17 +711,17 @@
   el('chart').addEventListener('pointercancel',()=>{finishConditionDrag(true);finishOrderDrag(true);finishDrawingDrag(true);},true);
   const C=window.TerminalConditions;
   let conditionRun=null,conditionBusy=false,conditionDraftScope='',conditionFinished='',conditionLastResult='',conditionApplied=null,conditionDraftValid=true;
-  const conditionMessage=message=>{if(el('condition-status').textContent!==message)el('condition-status').textContent=message;const phase=serverMonitorActive()?(serverMonitor.phase==='review'?'Review':'Running'):conditionFinished?(conditionFinished.startsWith('Invalidated')?'Invalidated':'Finished'):conditionBusy?'Finishing':message.startsWith('Stopped')?'Stopped':'Draft';el('setup-phase').textContent=phase;el('setup-phase').dataset.phase=phase.toLowerCase();el('condition-stop').disabled=!serverMonitorActive()&&!conditionBusy;el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;};
+  const conditionMessage=message=>{if(el('condition-status').textContent!==message)el('condition-status').textContent=message;const phase=serverMonitorActive()?(serverMonitor.phase==='review'?'Review':'Running'):conditionFinished?(conditionFinished.startsWith('Invalidated')?'Invalidated':conditionFinished.startsWith('Skipped')?'Skipped':'Finished'):conditionBusy?'Finishing':message.startsWith('Stopped')?'Stopped':'Draft';el('setup-phase').textContent=phase;el('setup-phase').dataset.phase=phase.toLowerCase();el('condition-stop').disabled=!serverMonitorActive()&&!conditionBusy;el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;};
   const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
   function detachConditions(message){serverStateKey='' ;if(serverMonitorActive()){conditionMessage(`${serverMonitor.symbol} · server monitoring continues. Reconnecting the display does not stop it.`);return;}conditionRun=null;if(conditionApplied?.state==='running')conditionApplied.state='stopped';if(el('condition-status'))conditionMessage(conditionFinished||message);renderConditionProgress();}
   function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high','sensitivity'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
-  function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
+  function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),entryQuality:readEntryQuality(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
   function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
     const row=text('div','','terminal-condition-row');row.dataset.visible=String(value.visible!==false);row.dataset.conditionId=typeof value.id==='string'&&value.id&&!([...el('condition-list').children].some(item=>item.dataset.conditionId===value.id))?value.id:crypto.randomUUID();
     const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);const badge=text('span','Draft','terminal-condition-progress');badge.dataset.progress='draft';badge.setAttribute('aria-label','Condition progress');const duplicate=text('button','⧉','terminal-condition-duplicate');duplicate.type='button';duplicate.title='Duplicate condition';duplicate.setAttribute('aria-label','Duplicate condition');duplicate.onclick=event=>{event.stopPropagation();duplicateCondition(row);};header.append(summary,badge,duplicate);row.append(header,editor);
     row.onfocusin=event=>{if(event.target.matches('[data-field]'))conditionHistoryGroup={label:'Edit '+event.target.getAttribute('aria-label'),recorded:false};if(!event.target.closest('.terminal-condition-summary'))selectCondition(row);};row.onfocusout=event=>{if(event.target.matches('[data-field]'))conditionHistoryGroup=null;};row.onclick=event=>{if(row.isConnected&&!event.target.closest('.terminal-condition-summary'))selectCondition(row);};
     const visibility=text('label','Show on chart'),check=document.createElement('input');check.type='checkbox';check.checked=value.visible!==false;check.setAttribute('aria-label','Show condition on chart');check.onchange=()=>{row.dataset.visible=String(check.checked);saveConditions();};visibility.prepend(check);header.append(visibility);
-    const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);if(!options&&name!=='sensitivity'){const pick=text('button','Pick on chart');pick.type='button';pick.onclick=()=>{setTool('cursor');selectCondition(row);conditionPick={row,field:name};el('tool-hint').textContent='Click the chart to set condition '+name+' · Escape cancels';};label.append(pick);}editor.append(label);return input;};
+    const add=(title,name,options)=>{const label=text('label',title),input=document.createElement(options?'select':'input');input.dataset.field=name;input.setAttribute('aria-label',title);if(options)for(const [code,label] of options)input.append(new Option(label,code));else{input.type='number';input.step='any';input.min='0';}input.value=value[name];label.append(input);if(!options&&name!=='sensitivity'){const pick=text('button','Pick on chart');pick.type='button';pick.onclick=()=>{setTool('cursor');selectCondition(row);conditionPick={row,field:name};if(el('setup-builder').open)closeSetupBuilder(true);el('tool-hint').textContent='Click the chart to set condition '+name+' · Escape cancels';};label.append(pick);}editor.append(label);return input;};
     const rule=add('Rule','rule',Object.entries(C.rules)),mode=add('Evaluate','mode',[['LIVE','Live Bid'],['CANDLE','Completed candle']]),tf=add('Timeframe','timeframe',C.frames.map(f=>[f,f]));
     value={sensitivity:2,...value};
     const sensitivity=add('Swing candles each side','sensitivity');sensitivity.min='1';sensitivity.max='10';sensitivity.step='1';
@@ -740,7 +742,7 @@
     selectedConditionRow=null;conditionPick=null;
     el('condition-show-levels').checked=value.showLevels!==false;el('condition-show-zones').checked=value.showZones!==false;
     el('condition-list').replaceChildren();el('condition-action').value='ALERT';
-    el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(value.autoPlan);setInvalidation(value.invalidation);setMonitorSettings(value.monitoring);
+    el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(value.autoPlan);setInvalidation(value.invalidation);setEntryQuality(value.entryQuality);setMonitorSettings(value.monitoring);
     for(const name of ['timeout','gap'])el('condition-'+name).value=Number.isFinite(Number(value[name]))&&Number(value[name])>=0?value[name]:(name==='gap'?300:0);
     if(Array.isArray(value.rows))for(const row of value.rows)if(row&&typeof row==='object')conditionRow(row);
     resetConditionUndo();renderConditionValidation();if(conditionEvents.length)logConditionEvent('Restored','Saved draft restored. Monitoring was not resumed.');
@@ -782,12 +784,12 @@
     if(key!==serverStateKey){
       serverStateKey=key;
       if(same){
-        conditionApplied=run.applied;conditionFinished=['finished','invalidated'].includes(run.phase)?run.message:'';
-        if(['finished','invalidated'].includes(run.phase)){conditionLastResult=run.message;renderSetupResult();}
+        conditionApplied=run.applied;conditionFinished=['finished','invalidated','skipped'].includes(run.phase)?run.message:'';
+        if(['finished','invalidated','skipped'].includes(run.phase)){conditionLastResult=run.message;renderSetupResult();}
         saveConditions();renderConditionProgress();
       }
       conditionMessage((same?'':`${run.symbol} · account ${run.account} · `)+run.message);
-      el('setup-phase').textContent=run.phase==='review'?'Review':run.phase==='running'?'Running':run.phase==='stopped'?'Stopped':run.phase==='invalidated'?'Invalidated':'Finished';
+      el('setup-phase').textContent=run.phase==='review'?'Review':run.phase==='running'?'Running':run.phase==='stopped'?'Stopped':run.phase==='invalidated'?'Invalidated':run.phase==='skipped'?'Skipped':'Finished';
     }
     if(run.phase==='review'&&same&&run.review&&run.review.preview!==serverReviewShown){
       const result=run.review;serverReviewShown=result.preview;
@@ -800,6 +802,7 @@
       if(result.calculation)el('order-summary').append(text('p',autoPlanSummary(result.calculation)));
       el('submit').textContent=`Confirm & send ${result.demo?'demo':'LIVE'} order`;el('submit').hidden=false;
       expiryTimer=setTimeout(()=>{if(preview===result.preview){invalidate(false);el('order-summary').append(text('p','Condition review expired. Start explicitly for a new setup.'));}},Math.max(0,run.review_expires*1000-Date.now()));
+      if(el('setup-builder').open){el('builder-manual-review').open=true;setBuilderStep('review');}
       el('submit').scrollIntoView({block:'nearest'});
     }
     if(run.phase!=='review'&&preview&&preview===serverReviewShown)invalidate(false);
@@ -986,6 +989,7 @@
   }
 
   function selectSetupTab(name,focus=false){
+    if(el('setup-builder').open){setBuilderStep(name==='order'?'entry':'conditions');return;}
     for(const tab of ['order','conditions']){
       const selected=tab===name,button=el('setup-tab-'+tab);
       button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;
@@ -1017,11 +1021,11 @@
     finishConditionDrag(true);conditionPick=null;
     if(conditionFinished)conditionLastResult=conditionFinished;
     conditionFinished='';conditionRun=null;conditionApplied=null;selectedConditionRow=null;el('condition-list').replaceChildren();
-    el('condition-action').value='ALERT';setAutoPlan();setInvalidation();setMonitorSettings();el('condition-start').textContent='Start conditions';
+    el('condition-action').value='ALERT';setAutoPlan();setInvalidation();setEntryQuality();setMonitorSettings();el('condition-start').textContent='Start conditions';
     endOrderEdit();dismissTicketDraft();el('volume').value=market?.volume_min||.01;
     logConditionEvent('New draft','New setup draft created. Monitoring stopped and automatic entry is off.');
     conditionMessage('Draft. Configure conditions and order, then Start.');
-    saveConditions();renderSetupResult();selectSetupTab('conditions');
+    saveConditions();renderSetupResult();selectSetupTab('conditions');if(el('setup-builder').open)el('builder-templates').open=true;
   }
   el('setup-new').onclick=async()=>{if(conditionBusy||submitting||reviewing||closing)return;serverDetachedId=serverMonitor?.id||'';if(await stopBeforeDraft('Stopped: new setup draft requested. Already submitted orders remain in MT5.'))clearSetupDraft();};
   const conditionSignature=row=>JSON.stringify(['rule','mode','timeframe','level','low','high','sensitivity'].map(key=>key==='sensitivity'&&!C.structure(row?.rule)?null:row?.[key]));
@@ -1050,7 +1054,7 @@
     restoreConditions();
     const row=conditionRow({rule:drawing.type==='level'?'TRADED_ABOVE':'ZONE_ENTER',mode:'LIVE',timeframe:C.frames.includes(el('timeframe').value)?el('timeframe').value:'H1',level:drawing.type==='level'?level:0,low,high,visible:true});
     if(smallPanels())el('pane').classList.add('mobile-ticket-open');else el('pane').classList.remove('ticket-collapsed');sizePanels();
-    setTool('cursor');selectSetupTab('conditions');selectCondition(row);
+    setTool('cursor');selectSetupTab('conditions');selectCondition(row);if(!el('quick-editor').open)openSetupBuilder('conditions');
     row.scrollIntoView({block:'nearest'});
     el('tool-hint').textContent='Condition draft copied from drawing. Choose its rule, then Start to apply.';
   };
@@ -1160,13 +1164,13 @@
 
   let conditionComparisonKey='';
   function conditionComparisonSettings(){
-    return {action:el('condition-action').value,sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,ticket:Object.fromEntries(['side','order-kind','order-price','volume','sl','tp'].map(name=>[name,el(name).value]))};
+    return {action:el('condition-action').value,sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),entryQuality:readEntryQuality(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,ticket:Object.fromEntries(['side','order-kind','order-price','volume','sl','tp'].map(name=>[name,el(name).value]))};
   }
   function comparisonPrice(value){const n=Number(value);return Number.isFinite(n)&&n>0?n.toLocaleString('en-US',{maximumFractionDigits:8}):'Not set';}
   function comparisonSettings(settings){
     if(!settings)return null;const ticket=settings.ticket||{};
     const timing=(value,unit)=>value===''||!Number.isFinite(Number(value))||Number(value)<0?'Invalid':Number(value)===0?'Off':`${Number(value)} ${unit}`;
-    const result={action:{ALERT:'Alerts only',REVIEW:'Prepare for review',AUTO:'Automatic entry'}[settings.action]||'Not set',sizing:settings.sizing==='AUTO'?'2% equity':'Manual lots',side:ticket.side||'Not set',kind:ticket['order-kind']==='PENDING'?'Pending':'Market',entry:ticket['order-kind']==='PENDING'?comparisonPrice(ticket['order-price']):'Market quote',volume:settings.sizing==='AUTO'?'Auto (2% equity)':comparisonPrice(ticket.volume),sl:comparisonPrice(ticket.sl),tp:comparisonPrice(ticket.tp),timeout:timing(settings.timeout,'min'),gap:timing(settings.gap,'s'),invalidation:invalidationDescription(settings.invalidation),monitoring:settings.monitoring?`${settings.monitoring.name||'Automatic name'} · ${settings.monitoring.group||'No linked group'} · ${settings.monitoring.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`:'Independent setup',plan:settings.autoPlan?.enabled?`${settings.autoPlan.entry} · ${settings.autoPlan.timeframe} swing ${settings.autoPlan.sensitivity} · buffer ${settings.autoPlan.buffer} ticks · ${settings.autoPlan.rr}R · ${settings.autoPlan.risk}% risk · expiry ${settings.autoPlan.expiry} min`:'Off'};
+    const result={action:{ALERT:'Alerts only',REVIEW:'Prepare for review',AUTO:'Automatic entry'}[settings.action]||'Not set',sizing:settings.sizing==='AUTO'?'2% equity':'Manual lots',side:ticket.side||'Not set',kind:ticket['order-kind']==='PENDING'?'Pending':'Market',entry:ticket['order-kind']==='PENDING'?comparisonPrice(ticket['order-price']):'Market quote',volume:settings.sizing==='AUTO'?'Auto (2% equity)':comparisonPrice(ticket.volume),sl:comparisonPrice(ticket.sl),tp:comparisonPrice(ticket.tp),timeout:timing(settings.timeout,'min'),gap:timing(settings.gap,'s'),invalidation:invalidationDescription(settings.invalidation),quality:qualityDescription(settings.entryQuality),monitoring:settings.monitoring?`${settings.monitoring.name||'Automatic name'} · ${settings.monitoring.group||'No linked group'} · ${settings.monitoring.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`:'Independent setup',plan:settings.autoPlan?.enabled?`${settings.autoPlan.entry} · ${settings.autoPlan.timeframe} swing ${settings.autoPlan.sensitivity} · buffer ${settings.autoPlan.buffer} ticks · ${settings.autoPlan.rr}R · ${settings.autoPlan.risk}% risk · expiry ${settings.autoPlan.expiry} min`:'Off'};
     if(settings.autoPlan?.enabled){const plan=settings.autoPlan;Object.assign(result,{sizing:`Automatic ${plan.risk}% equity`,kind:plan.entry==='RETEST'?'Retest limit':'Market',entry:plan.entry==='RETEST'?'Matching BOS/MS break':'Market quote at completion',volume:'Calculate at completion',sl:`${plan.timeframe} confirmed swing + ${plan.buffer} ticks`,tp:`${plan.rr}R price distance`});}
     return result;
   }
@@ -1175,7 +1179,7 @@
     return `${C.rules[row.rule]||'Choose rule'} · ${price} · ${row.mode==='LIVE'?'Live Bid':row.timeframe+' candle'}`;
   }
   function renderConditionComparison(){
-    renderConditionPreview();renderInvalidationControls();renderSetupReadiness();
+    renderConditionPreview();renderInvalidationControls();renderEntryQualityControls();renderSetupReadiness();renderBuilderSummary();
     const applied=conditionApplied,draft=conditionRows(),currentSettings=comparisonSettings(conditionComparisonSettings()),appliedSettings=comparisonSettings(applied?.settings);
     const key=JSON.stringify([applied,draft.map(({visible,...row})=>row),currentSettings]);if(key===conditionComparisonKey)return;conditionComparisonKey=key;
     const pairs=[];let changes=0;
@@ -1210,7 +1214,7 @@
     if(applied&&!appliedSettings){el('condition-comparison-settings-note').textContent='This older setup has no saved order/timing snapshot. Start a new run to capture one.';return;}
     el('condition-comparison-settings-note').textContent='Order and timing settings from Start. Order fields are inactive in alerts-only mode.';
     const head=document.createElement('thead'),header=document.createElement('tr');for(const name of ['Setting','Applied','Draft'])header.append(text('th',name));head.append(header);table.append(head);
-    const body=document.createElement('tbody'),labels={action:'Action',sizing:'Sizing',side:'Side',kind:'Order',entry:'Entry',volume:'Lots',sl:'Stop loss',tp:'Take profit',timeout:'Timeout',gap:'Quote gap',plan:'Automatic plan',invalidation:'Invalidation',monitoring:'Monitoring'};
+    const body=document.createElement('tbody'),labels={action:'Action',sizing:'Sizing',side:'Side',kind:'Order',entry:'Entry',volume:'Lots',sl:'Stop loss',tp:'Take profit',timeout:'Timeout',gap:'Quote gap',plan:'Automatic plan',invalidation:'Invalidation',quality:'Entry quality',monitoring:'Monitoring'};
     for(const item of settings){const row=document.createElement('tr');row.dataset.setting=item.field;row.dataset.changed=String(item.changed);row.append(text('th',labels[item.field]),text('td',item.previous??'—'),text('td',item.value));body.append(row);}table.append(body);
   }
 
@@ -1229,7 +1233,7 @@
     try{
       const name=el('condition-template-name').value.trim();if(!name||name.length>60)throw Error('Enter a template name of 1–60 characters.');
       const rows=C.validate(conditionRows());if(!rows.length)throw Error('Add at least one valid condition before saving.');
-      const settings=conditionComparisonSettings();if(autoPlanErrors(settings.autoPlan).length)throw Error(autoPlanErrors(settings.autoPlan)[0]);if(invalidationErrors(settings.invalidation||{enabled:false}).length)throw Error(invalidationErrors(settings.invalidation)[0]);if(![settings.timeout,settings.gap].every(value=>value!==''&&Number.isFinite(Number(value))&&Number(value)>=0))throw Error('Fix the timing settings before saving.');
+      const settings=conditionComparisonSettings();if(entryQualityErrors(settings.entryQuality,rows).length)throw Error(entryQualityErrors(settings.entryQuality,rows)[0]);if(autoPlanErrors(settings.autoPlan).length)throw Error(autoPlanErrors(settings.autoPlan)[0]);if(invalidationErrors(settings.invalidation||{enabled:false}).length)throw Error(invalidationErrors(settings.invalidation)[0]);if(![settings.timeout,settings.gap].every(value=>value!==''&&Number.isFinite(Number(value))&&Number(value)>=0))throw Error('Fix the timing settings before saving.');
       const prices=rows.filter(row=>!C.structure(row.rule)).flatMap(row=>C.zone(row.rule)?[row.low,row.high]:[row.level]);if(settings.invalidation?.enabled&&settings.invalidation.source==='LEVEL')prices.push(settings.invalidation.level);const anchor=prices.length?(Math.min(...prices)+Math.max(...prices))/2:(market?.bid||0);
       const previous=conditionTemplates.find(item=>item.name.toLowerCase()===name.toLowerCase());if(!previous&&conditionTemplates.length>=30)throw Error('The template library is full (30 templates). Remove one before saving another.');
       const template={id:previous?.id||crypto.randomUUID(),name,symbol:el('symbol').value,rows:structuredClone(rows),settings:structuredClone(settings),anchor,updated:Date.now()};
@@ -1243,7 +1247,7 @@
       if(!template)throw Error('Choose a saved template.');
       if(!market)throw Error('Connect a market before loading a template.');
       if(!reposition&&template.symbol!==el('symbol').value)throw Error(`Saved prices belong to ${template.symbol}. Choose Reposition for this chart when changing symbols.`);
-      const rows=structuredClone(template.rows);C.validate(rows);const settings=template.settings||{},ticket=settings.ticket||{};if(autoPlanErrors(settings.autoPlan||{enabled:false}).length)throw Error(autoPlanErrors(settings.autoPlan)[0]);if(invalidationErrors(settings.invalidation||{enabled:false}).length)throw Error(invalidationErrors(settings.invalidation)[0]);
+      const rows=structuredClone(template.rows);C.validate(rows);const settings=template.settings||{},ticket=settings.ticket||{};if(entryQualityErrors(settings.entryQuality,rows).length)throw Error(entryQualityErrors(settings.entryQuality,rows)[0]);if(autoPlanErrors(settings.autoPlan||{enabled:false}).length)throw Error(autoPlanErrors(settings.autoPlan)[0]);if(invalidationErrors(settings.invalidation||{enabled:false}).length)throw Error(invalidationErrors(settings.invalidation)[0]);
       if(![settings.timeout,settings.gap].every(value=>value!==undefined&&value!==''&&Number.isFinite(Number(value))&&Number(value)>=0))throw Error('This template has invalid timing settings.');
       let ratio=1;
       if(reposition){
@@ -1256,7 +1260,7 @@
       serverDetachedId=serverMonitor?.id||'';if(!await stopBeforeDraft('Stopped: template load requested. Already submitted orders remain in MT5.')){templateMessage('Stop not confirmed. Draft unchanged. Check server status.');return false;}
       conditionHistoryTransaction('Load template',()=>{
         clearSetupDraft();
-        el('condition-sizing').value=settings.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(settings.autoPlan);setMonitorSettings(settings.monitoring);setInvalidation(settings.invalidation?{...settings.invalidation,level:settings.invalidation.source==='LEVEL'?price(settings.invalidation.level):settings.invalidation.level}:undefined);
+        el('condition-sizing').value=settings.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(settings.autoPlan);setEntryQuality(settings.entryQuality?{...settings.entryQuality,target:price(settings.entryQuality.target),max_distance:settings.entryQuality.max_distance*ratio}:undefined);setMonitorSettings(settings.monitoring);setInvalidation(settings.invalidation?{...settings.invalidation,level:settings.invalidation.source==='LEVEL'?price(settings.invalidation.level):settings.invalidation.level}:undefined);
         for(const name of ['timeout','gap'])el('condition-'+name).value=settings[name];
         el('side').value=ticket.side==='SELL'?'SELL':'BUY';el('order-kind').value=ticket['order-kind']==='PENDING'?'PENDING':'MARKET';
         el('volume').value=Number(ticket.volume)>0?Number(ticket.volume):market.volume_min;
@@ -1296,7 +1300,7 @@
     const outcome=action==='AUTO'?'attempt one order and finish, without automatic retries':action==='REVIEW'?'prepare an order for your confirmation':'show an alert and finish';
     const message=rows.length?`${rows.map((row,index)=>(index?'Then ':'')+phrase(row)).join('. ')}. When all steps pass, ${outcome}.`:`No conditions. Start will immediately ${outcome}.`;
     const plan=readAutoPlan(),description=plan.enabled&&action!=='ALERT'?` Automatic trade plan: ${plan.entry==='RETEST'?'limit retest of the matching structure break':'market entry'}, SL from a confirmed ${plan.timeframe} swing with ${plan.buffer} ticks buffer, TP ${plan.rr}R, lots for ${plan.risk}% equity${plan.entry==='RETEST'?', broker expiry '+plan.expiry+' minutes':''}.`:'';
-    const node=el('condition-preview-text');const guard=readInvalidation(),cancel=guard.enabled?' Cancel the waiting setup if '+invalidationDescription(guard)+'. This guard is checked before entry and remains active during review.':'';if(node.textContent!==message+description+cancel)node.textContent=message+description+cancel;
+    const node=el('condition-preview-text');const guard=readInvalidation(),cancel=guard.enabled?' Cancel the waiting setup if '+invalidationDescription(guard)+'. This guard is checked before entry and remains active during review.':'';if(node.textContent!==message+description+cancel+(readEntryQuality().enabled?' Entry quality: '+qualityDescription(readEntryQuality())+'.':''))node.textContent=message+description+cancel+(readEntryQuality().enabled?' Entry quality: '+qualityDescription(readEntryQuality())+'.':'');
   }
   renderConditionTemplates();
 
@@ -1323,7 +1327,7 @@
         ticket:{side:preset.side,'order-kind':'MARKET','order-price':'',volume:market?.volume_min||.01,sl:'',tp:''}}};
     if(await loadConditionTemplate(template)){
       el('condition-starter-status').textContent=`Loaded “${name}” for ${template.symbol}. Inactive, alerts only. Next: inspect Automatic trade plan settings; choose Prepare order for review, then Start when ready. Save a named template to keep your changes.`;
-      el('auto-plan').open=true;el('condition-preview').open=true;el('invalidation-settings').open=true;
+      el('auto-plan').open=true;el('condition-preview').open=true;el('invalidation-settings').open=true;if(el('setup-builder').open)el('builder-templates').open=false;
     }else el('condition-starter-status').textContent=el('condition-template-status').textContent;
   };
   renderStarter();
@@ -1339,6 +1343,8 @@
     for(const [index,row] of rows.entries())if(C.structure(row.rule)&&!Object.keys(C.fieldErrors(row)).length){const info=draftStructure(row);add(`Structure step ${index+1}`,'waiting',`${row.timeframe} · ${info.status}. Only a new close while this step is active can pass.`);}
     const guard=readInvalidation();if(guard.enabled){const errors=invalidationErrors(guard);for(const error of errors)add('Invalidation','blocked',error);if(!errors.length){const calculated=invalidationPreview();add('Invalidation',calculated.error?'blocked':calculated.level?'ready':'waiting',calculated.error|| (calculated.level?`Cancel if Bid is ${calculated.direction==='BELOW'?'at/below':'at/above'} ${comparisonPrice(calculated.level)}. Swing levels freeze at Start.`:'Waiting for cancellation swing history. The server requires a usable swing at Start.'));}}
     if(trade){
+      for(const error of entryQualityErrors(readEntryQuality(),rows))add('Entry quality','blocked',error);
+      if(readEntryQuality().enabled)add('Entry quality','pending',qualityDescription(readEntryQuality())+' Checked at execution; failure skips without retry.');
       add('Trading permissions',market?.trading_allowed===false?'blocked':market?.trading_allowed===true?'ready':'pending',market?.trading_allowed===false?'Enable account trading, Algo Trading and external Python trading in MT5.':market?.trading_allowed===true?'MT5 trading permissions enabled.':'Permissions will be checked by MT5 before execution.');
       if(readAutoPlan().enabled){
         for(const error of autoPlanErrors(readAutoPlan()))add('Automatic plan','blocked',error);
@@ -1415,6 +1421,24 @@
   renderAutoPlanControls();
 
 
+  function readEntryQuality(){const value={enabled:el('quality-enabled').checked};for(const name of ['max_distance','min_rr','target','reference_step']){const input=el('quality-'+name),raw=name==='reference_step'?(input.value||input.dataset.pending||'1'):input.value;value[name]=raw.trim()===''?NaN:Number(raw);}return value;}
+  function setEntryQuality(value={}){const settings={enabled:false,max_distance:0,min_rr:2,target:0,reference_step:1,...value};el('quality-enabled').checked=settings.enabled===true;for(const name of ['max_distance','min_rr','target'])el('quality-'+name).value=settings[name];el('quality-reference_step').dataset.pending=String(settings.reference_step);renderEntryQualityControls();}
+  function entryQualityErrors(value,rows=conditionRows()){
+    if(!value?.enabled)return [];const errors=[];
+    if(!['max_distance','min_rr','target'].every(name=>Number.isFinite(value[name])&&value[name]>=0)||value.min_rr>100)errors.push('Entry quality needs nonnegative values and minimum RR no greater than 100.');
+    if(!value.max_distance&&!value.min_rr)errors.push('Set maximum distance or minimum RR above zero.');
+    if(value.max_distance>0&&(!Number.isInteger(value.reference_step)||value.reference_step<1||value.reference_step>rows.length))errors.push('Choose an existing reference condition for the distance check.');return errors;
+  }
+  function qualityDescription(value){if(!value?.enabled)return 'Off';return [value.max_distance>0?`Entry within ${value.max_distance} price units of condition ${value.reference_step}`:'',value.min_rr>0?`minimum RR 1:${value.min_rr}${value.target>0?' to the nearer of TP and '+comparisonPrice(value.target):' to order TP'}`:''].filter(Boolean).join('; ');}
+  function renderEntryQualityControls(){
+    const select=el('quality-reference_step'),chosen=select.dataset.pending||select.value||'1',rows=conditionRows(),options=JSON.stringify(rows.map(r=>[r.rule,r.level,r.low,r.high]));
+    if(select.dataset.options!==options){select.replaceChildren(...rows.map((r,i)=>new Option(`${i+1}: ${C.rules[r.rule]||r.rule}`,String(i+1))));select.dataset.options=options;}
+    select.value=chosen;const value=readEntryQuality();for(const name of ['max_distance','min_rr','target'])el('quality-'+name).disabled=!value.enabled;select.disabled=!value.enabled||!(value.max_distance>0);el('quality-target').disabled=!value.enabled||!(value.min_rr>0);
+    el('quality-status').textContent=value.enabled?entryQualityErrors(value,rows).join(' ')||qualityDescription(value)+'. Frozen at Start.':'Off — existing entry behavior is unchanged.';
+  }
+  for(const name of ['enabled','max_distance','min_rr','target','reference_step'])el('quality-'+name).addEventListener(['enabled','reference_step'].includes(name)?'change':'input',()=>{if(name==='reference_step')el('quality-reference_step').dataset.pending=el('quality-reference_step').value;renderEntryQualityControls();invalidate();saveConditions();});
+  renderEntryQualityControls();
+
   function readMonitorSettings(){return {name:el('monitor-name').value.trim(),group:el('monitor-group').value.trim(),group_policy:el('monitor-policy').value};}
   function setMonitorSettings(value={}){el('monitor-name').value=value.name||'';el('monitor-group').value=value.group||'';el('monitor-policy').value=value.group_policy==='FIRST_ENTRY'?'FIRST_ENTRY':'ALL';}
   function renderMonitorList(){
@@ -1425,6 +1449,7 @@
     const cards=serverMonitors.slice().reverse().map(run=>{
       const card=text('article','','terminal-monitor-card');card.dataset.monitorId=run.id;card.dataset.selected=String(run.id===selectedMonitorId);
       card.append(text('strong',run.name||`${run.symbol} setup`),text('span',`${run.symbol} · ${run.settings.ticket.side} · ${run.action} · ${run.phase} · ${run.applied.index}/${run.rows.length}`,'terminal-monitor-meta'));
+      card.append(text('span',`${run.settings.autoPlan?.enabled?'Risk '+run.settings.autoPlan.risk+'%':run.settings.sizing==='AUTO'?'Risk 2%':'Lots '+run.settings.ticket.volume}${run.invalidation?.enabled?' · Cancel Bid '+(run.invalidation.direction==='BELOW'?'≤':'≥')+' '+run.invalidation.level:''}`,'terminal-monitor-meta'));
       if(run.group)card.append(text('span',`${run.group} · ${run.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`,'terminal-monitor-meta'));
       card.append(text('p',run.message));const actions=document.createElement('div'),open=text('button',run.phase==='review'?'Open review':'Open setup'),stop=text('button','Stop');open.type=stop.type='button';
       open.disabled=run.scope!==scope||conditionBusy||submitting||reviewing||closing;open.onclick=()=>openMonitoredSetup(run.id);
@@ -1443,11 +1468,12 @@
       invalidate();selectedMonitorId=id;serverMonitor=null;serverStateKey='';serverDetachedId='';serverReviewShown='';conditionFinished='';conditionApplied=null;
       const settings=run.settings,ticket=settings.ticket;conditionHistorySuspended=true;el('condition-list').replaceChildren();
       for(const row of run.rows)conditionRow(row);
-      setAutoPlan(settings.autoPlan);setInvalidation(settings.invalidation);setMonitorSettings({name:run.name,group:run.group,group_policy:run.group_policy});
+      setAutoPlan(settings.autoPlan);setEntryQuality(settings.entryQuality);setInvalidation(settings.invalidation);setMonitorSettings({name:run.name,group:run.group,group_policy:run.group_policy});
       for(const name of ['sizing','timeout','gap','action'])el('condition-'+name).value=settings[name];
       for(const name of ['side','order-kind','order-price','volume','sl','tp'])el(name).value=ticket[name]??'';
       conditionHistorySuspended=false;resetConditionUndo();saveConditions();updateOrderHint();syncDraftLines();selectSetupTab('conditions');
       receiveServerConditions({run,runs:serverMonitors});
+      if(!el('quick-editor').open)openSetupBuilder(run.phase==='review'?'review':'conditions');
     }catch(error){conditionHistorySuspended=false;conditionMessage(error.message);}
     finally{conditionBusy=false;updateTicket();}
   }
@@ -1455,6 +1481,7 @@
     if(conditionBusy||submitting||reviewing||closing)return;
     invalidate();selectedMonitorId='';serverMonitor=null;serverStateKey='';serverDetachedId='';serverReviewShown='';clearSetupDraft();renderMonitorList();
     conditionMessage('Independent draft. Existing monitors continue. Configure this setup, then Start.');
+    if(!el('quick-editor').open)openSetupBuilder('conditions');
   };
   el('monitor-stop-all').onclick=async()=>{try{receiveServerConditions(await call('terminal/conditions/stop',{all:true,reason:'Stopped: Stop all requested. Broker orders remain unchanged.'}));}catch(error){conditionMessage('Stop all not confirmed: '+error.message);}};
   for(const name of ['name','group','policy'])el('monitor-'+name).addEventListener(name==='policy'?'change':'input',()=>{saveConditions();});
@@ -1468,7 +1495,7 @@
     const guard={enabled:false,source:'SWING',direction:'BELOW',level:0,timeframe:'M5',sensitivity:2,buffer:10,visible:true,...value};
     for(const name of ['enabled','visible'])el('invalidation-'+name).checked=guard[name]===true;
     for(const name of ['source','direction','level','timeframe','sensitivity','buffer'])el('invalidation-'+name).value=guard[name];
-    renderInvalidationControls();
+    renderInvalidationControls();renderEntryQualityControls();
   }
   function invalidationErrors(guard){
     if(!guard.enabled)return [];const errors=[];
@@ -1511,6 +1538,90 @@
     const input=el('invalidation-'+name);input.addEventListener(input.type==='number'?'input':'change',()=>{renderInvalidationControls();invalidate();saveConditions();loadStructureDrafts();});
   }
   renderInvalidationControls();
+
+  const builderMoves=[],builderPanels={};let builderStep='conditions',builderFocus=null;
+  const quickEditor=el('quick-editor');try{quickEditor.open=localStorage.getItem('tradetrace.quickEditorOpen')==='true';}catch(_){}
+  quickEditor.addEventListener('toggle',()=>{if(quickEditor.open&&!el('setup-builder').open&&builderMoves.length)restoreQuickEditor();try{localStorage.setItem('tradetrace.quickEditorOpen',String(quickEditor.open));}catch(_){}sizePanels();});
+  function builderMove(node,parent){if(!node)return;const marker=document.createComment('setup-builder-return');node.before(marker);builderMoves.push({node,marker});parent.append(node);}
+  function openSetupBuilder(step='conditions'){
+    const dialog=el('setup-builder');if(dialog.open){setBuilderStep(step);return;}
+    builderFocus=document.activeElement;
+    if(builderMoves.length){
+      el('conditions-panel').hidden=el('setup-order-panel').hidden=false;el('builder-templates').open=conditionRows().length===0;el('builder-manual-review').open=!el('submit').hidden||!!editingOrder||!!editingPosition;
+      dialog.classList.remove('builder-advanced');el('builder-mode').textContent='Show advanced';el('builder-mode').setAttribute('aria-pressed','false');
+      setBuilderStep(step,true);dialog.showModal();return;
+    }
+    const form=el('ticket');el('builder-form-host').append(form);
+    for(const name of ['conditions','entry','review']){const panel=document.createElement('section');panel.id='terminal-builder-panel-'+name;panel.setAttribute('aria-labelledby','terminal-builder-step-'+name);panel.setAttribute('role','region');builderPanels[name]=panel;form.append(panel);}
+    builderMove(el('conditions-panel'),builderPanels.conditions);builderMove(el('setup-order-panel'),builderPanels.entry);
+    const templates=document.createElement('details');templates.id='terminal-builder-templates';templates.className='builder-temporary';templates.innerHTML='<summary>Choose a starter or saved template</summary>';templates.open=conditionRows().length===0;el('conditions-panel').prepend(templates);builderMove(el('condition-starters'),templates);builderMove(el('condition-templates'),templates);el('conditions-panel').querySelector(':scope>p.terminal-muted')?.classList.add('builder-advanced');
+    builderMove(form.querySelector('.terminal-setup-risk'),builderPanels.entry);
+    builderMove(el('condition-action').parentElement,builderPanels.entry);
+    builderMove(el('auto-plan-enabled').parentElement,builderPanels.entry);builderMove(el('auto-plan'),builderPanels.entry);
+    const planFields=document.createElement('div');planFields.className='terminal-builder-plan-fields builder-temporary';el('auto-plan').insertBefore(planFields,el('auto-plan').querySelector('label'));for(const label of [...el('auto-plan').querySelectorAll(':scope>label')])builderMove(label,planFields);
+    for(const name of ['invalidation-enabled','quality-enabled']){const label=el(name).parentElement;label.classList.add('builder-advanced');builderMove(label,builderPanels.entry);}
+    for(const name of ['invalidation-settings','quality-settings']){el(name).classList.add('builder-advanced');builderMove(el(name),builderPanels.entry);}
+    const timing=el('condition-timeout').closest('details');timing.classList.add('builder-advanced');builderMove(timing,builderPanels.entry);
+    el('monitor-group-settings').classList.add('builder-advanced');
+    for(const name of ['condition-preview','setup-readiness'])builderMove(el(name),builderPanels.review);
+    el('condition-preview').open=el('setup-readiness').open=true;
+    for(const name of ['condition-comparison','condition-event-log','setup-last-result']){el(name).classList.add('builder-advanced');builderMove(el(name),builderPanels.review);}
+    builderMove(form.querySelector('.terminal-setup-account'),builderPanels.review);
+    const manual=document.createElement('details');manual.id='terminal-builder-manual-review';manual.className='terminal-builder-manual-review';manual.innerHTML='<summary>Manual ticket review / prepared order</summary>';builderPanels.review.append(manual);
+    for(const name of ['preview','order-summary','submit'])builderMove(el(name),manual);
+    manual.open=!el('submit').hidden||!!editingOrder||!!editingPosition;
+    builderMove(form.querySelector('.terminal-setup-run-actions'),builderPanels.review);
+    for(const label of el('setup-order-panel').children)if(!label.classList.contains('terminal-side-cards')&&label.tagName!=='SELECT'&&label.id!=='terminal-ticket-editing'&&label.id!=='terminal-ticket-edit-cancel')label.classList.add('builder-manual-fields');
+    el('conditions-panel').hidden=el('setup-order-panel').hidden=false;
+    dialog.classList.remove('builder-advanced');el('builder-mode').textContent='Show advanced';el('builder-mode').setAttribute('aria-pressed','false');
+    setBuilderStep(step,true);dialog.showModal();
+  }
+  function restoreQuickEditor(){
+    if(!builderMoves.length)return;
+    const tab=el('setup-tab-order').getAttribute('aria-selected')==='true'?'order':'conditions';
+    for(const {node,marker} of builderMoves.reverse()){marker.replaceWith(node);}builderMoves.length=0;
+    el('ticket').querySelectorAll('.builder-temporary').forEach(node=>node.remove());
+    for(const panel of Object.values(builderPanels))panel.remove();el('quick-editor-host').append(el('ticket'));
+    selectSetupTab(tab);
+  }
+  function closeSetupBuilder(chart=false){
+    const dialog=el('setup-builder');if(!dialog.open)return;
+    dialog.close();selectSetupTab(builderStep==='conditions'?'conditions':'order');
+    // Keep the prepared layout when the classic editor is collapsed. Reopening
+    // then only switches the visible step instead of moving dozens of controls.
+    if(quickEditor.open)restoreQuickEditor();renderBuilderSummary();
+    if(chart){el('chart').scrollIntoView({block:'center'});el('chart').focus({preventScroll:true});}else if(builderFocus?.isConnected)builderFocus.focus({preventScroll:true});
+  }
+  function setBuilderStep(step,preparing=false){
+    if(!el('setup-builder').open&&!preparing)return;builderStep=step;
+    for(const name of ['conditions','entry','review']){builderPanels[name].hidden=name!==step;const button=el('builder-step-'+name);if(name===step)button.setAttribute('aria-current','step');else button.removeAttribute('aria-current');}
+    el('builder-form-host').scrollTop=0;el('builder-back').disabled=step==='conditions';el('builder-next').hidden=step==='review';
+    el('builder-next').textContent=step==='conditions'?'Next: Entry & risk →':'Next: Review →';
+    el('builder-step-hint').textContent=step==='conditions'?'Choose a template or build your conditions.':step==='entry'?'Choose side, execution mode and risk.':'Review all settings. Only Start arms this setup.';
+    renderBuilderSummary(preparing);
+  }
+  function renderBuilderSummary(preparing=false){
+    const sidebar=el('builder-draft-summary');if(!sidebar)return;
+    const rows=conditionRows(),plan=readAutoPlan(),side=el('side').value,name=readMonitorSettings().name||'Unnamed draft';
+    const setText=(node,value)=>{if(node.textContent!==value)node.textContent=value;};
+    setText(sidebar,`${name} · ${rows.length} condition${rows.length===1?'':'s'} · ${side} · ${plan.enabled?plan.risk+'% risk':'ticket lots'}`);
+    const dialog=el('setup-builder');if(!dialog.open&&!preparing)return;
+    dialog.classList.toggle('builder-use-auto',plan.enabled);if(plan.enabled&&!dialog.classList.contains('builder-advanced')&&!el('auto-plan').open)el('auto-plan').open=true;
+    setText(el('builder-context'),`${el('symbol').value||'Select a market'} · ${market?(market.demo?'Demo':'LIVE')+' account '+market.account:'Connect MT5'} · ${name}`);
+    setText(el('builder-story'),el('condition-preview-text').textContent||'Add conditions or load a starter template. An empty setup acts immediately when explicitly started.');
+    const facts=[['Execution',{ALERT:'Alerts only',REVIEW:'Prepare order for review',AUTO:'One automatic entry attempt'}[el('condition-action').value]],['Entry',plan.enabled?(plan.entry==='RETEST'?'Limit retest · expires in '+plan.expiry+' minutes':'Market after confirmation'):side+' '+(el('order-kind').value==='MARKET'?'market':'pending at '+el('order-price').value)],['Risk & target',plan.enabled?`${plan.risk}% equity · ${plan.rr}R target · ${plan.timeframe} swing stop (${plan.sensitivity} candles, ${plan.buffer} ticks)`:`${el('volume').value||'—'} lots · SL ${el('sl').value||'not set'} · TP ${el('tp').value||'not set'}`],['Cancellation',invalidationDescription(readInvalidation())],['Entry quality',qualityDescription(readEntryQuality())],['Linked setups',readMonitorSettings().group?readMonitorSettings().group+' · '+(readMonitorSettings().group_policy==='FIRST_ENTRY'?'first entry stops others':'all may enter'):'Independent'],['Timing',`Timeout ${el('condition-timeout').value||0} min · quote-gap reset ${el('condition-gap').value||0} sec`]];
+    const factsNode=el('builder-facts'),factsKey=JSON.stringify(facts);if(factsNode.dataset.key!==factsKey){factsNode.dataset.key=factsKey;factsNode.replaceChildren(...facts.flatMap(([label,value])=>[text('dt',label),text('dd',value)]));}
+  }
+  el('builder-open').onclick=()=>openSetupBuilder('conditions');
+  for(const name of ['conditions','entry','review'])el('builder-step-'+name).onclick=()=>setBuilderStep(name);
+  el('builder-close').onclick=()=>closeSetupBuilder();el('builder-chart').onclick=()=>closeSetupBuilder(true);
+  el('builder-back').onclick=()=>setBuilderStep(builderStep==='review'?'entry':'conditions');el('builder-next').onclick=()=>setBuilderStep(builderStep==='conditions'?'entry':'review');
+  const advanced=()=>{const enabled=el('setup-builder').classList.toggle('builder-advanced');el('builder-mode').textContent=enabled?'Simple view':'Show advanced';el('builder-mode').setAttribute('aria-pressed',String(enabled));renderBuilderSummary();};
+  el('builder-mode').onclick=advanced;el('builder-advanced-shortcut').onclick=()=>{if(!el('setup-builder').classList.contains('builder-advanced'))advanced();setBuilderStep('entry');};
+  el('setup-builder').addEventListener('cancel',event=>{event.preventDefault();closeSetupBuilder();});
+  el('ticket').addEventListener('keydown',event=>{if(el('setup-builder').open&&event.key==='Enter'&&event.target.tagName==='INPUT')event.preventDefault();});
+  new MutationObserver(()=>{if(el('pane').hidden&&el('setup-builder').open)closeSetupBuilder();}).observe(el('pane'),{attributes:true,attributeFilter:['hidden']});
+  renderBuilderSummary();
 
   selectSetupTab('order');
 

@@ -10,6 +10,7 @@ from types import SimpleNamespace as Row
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import server
 from condition_monitor import ConditionMonitor
+from entry_quality import check_quality
 
 
 class FakeTerminal:
@@ -31,7 +32,11 @@ class FakeTerminal:
         return dict(preview=key,account=self.account,server='Test-Demo',demo=True,expires_in=60,order_kind=body['order_kind'],
                     request=dict(symbol=body['symbol'],volume=float(body['volume']),price=self.bid+.0001,sl=float(body['sl']),tp=float(body['tp'])))
     def submit(self,body):
-        saved=self.previews.pop(body['preview']);self.sent.append(saved)
+        saved=self.previews.pop(body['preview'])
+        if saved.get('condition_entry_quality',{}).get('enabled'):
+            market=saved['order_kind']=='MARKET';entry=(self.bid+.0001 if saved['side']=='BUY' else self.bid) if market else float(saved['price'])
+            check_quality(saved['condition_entry_quality'],entry,float(saved['sl']),float(saved['tp']),saved['side'],.00001,market)
+        self.sent.append(saved)
         return dict(retcode=10009,comment='Fake broker execution',order=str(len(self.sent)),deal=str(len(self.sent)),volume=float(saved['volume']),price=self.bid+.0001,operation='open',journal_recorded=True,message='Fake broker only')
 
 

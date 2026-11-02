@@ -8,6 +8,7 @@ import threading
 import time
 from condition_engine import Sequence, Structure, STRUCTURE, FRAMES, finite
 from terminal import ConditionInvalidated
+from entry_quality import EntryQualitySkipped, validate_quality, resolve_quality, check_quality
 
 
 def closed(data):
@@ -63,6 +64,7 @@ class ConditionRun:
         except (TypeError,ValueError):raise ValueError('Invalid timing settings.')
         if not all(math.isfinite(v) and v>=0 for v in (timeout,gap)):raise ValueError('Timing settings must be nonnegative.')
         sequence=Sequence(body.get('rows'),timeout*60,gap)
+        validate_quality(settings.get('entryQuality'),sequence.rows)
         if not isinstance(plan,dict):raise ValueError('Invalid automatic trade plan.')
         if plan.get('enabled') and action!='ALERT':
             for key,low,high in [('risk',.01,2),('rr',.1,100),('buffer',0,1000000),('sensitivity',1,10)]:
@@ -115,7 +117,7 @@ class ConditionRun:
         if run and (not body.get('id') or body['id']==run['id']):run['_cancel'].set()
 
     def _finish(self,message,phase='finished'):
-        self.run['phase']=phase;self.run['message']=message;self._event('Finished' if phase=='finished' else 'Stopped',message)
+        self.run['phase']=phase;self.run['message']=message;self._event('Finished' if phase=='finished' else 'Entry skipped' if phase=='skipped' else 'Stopped',message)
 
     def _market(self,tf):
         run=self.run;data=self.terminal.market(dict(symbol=run['symbol'],timeframe=tf))
@@ -213,6 +215,8 @@ class ConditionRun:
                     self._event('Step passed',f'Step {event["index"]+1}/{len(sequence.rows)}: {rule["rule"]} {level} · Bid {data["bid"]}.')
             if complete:self._complete(data)
             else:run['message']=f'Server monitoring · {"AUTO ORDER ARMED" if run["action"]=="AUTO" else "Review preparation" if run["action"]=="REVIEW" else "Alerts only"} · {run["symbol"]} · step {sequence.index+1} of {len(sequence.rows)}'+(' · '+sequence.structure_state['status'] if sequence.structure_state else '')+'. Frozen setup from Start; continues while the browser is hidden.'
+        except EntryQualitySkipped as error:
+            run['sent']=False;run['review']=None;self._finish(str(error)+' Start explicitly for a new setup.','skipped')
         except ConditionInvalidated as error:
             run['sent']=False
             self._check_invalidation(dict(bid=error.bid,quote_time=self.clock()))
@@ -226,7 +230,7 @@ class ConditionRun:
         if run['action']=='ALERT':self._finish('All conditions passed. Finished — click Start conditions to start again.');return
         settings=run['settings'];ticket=settings['ticket'];plan=settings.get('autoPlan') or {'enabled':False}
         body=dict(symbol=run['symbol'],side=ticket['side'],order_kind=ticket['order-kind'],price=ticket.get('order-price'),volume=ticket.get('volume'),sl=ticket.get('sl'),tp=ticket.get('tp'),
-                  condition_entry=True,condition_invalidation=copy.deepcopy(run['invalidation']),expected_account=run['account'],expected_server=run['server'],condition_risk_auto=settings['sizing']=='AUTO',
+                  condition_entry=True,condition_entry_quality=resolve_quality(settings.get('entryQuality'),run['rows'],run['observations']),condition_invalidation=copy.deepcopy(run['invalidation']),expected_account=run['account'],expected_server=run['server'],condition_risk_auto=settings['sizing']=='AUTO',
                   condition_monitor_id=run['id'],condition_setup=dict(monitor_id=run['id'],name=run.get('name',''),group=run.get('group',''),group_policy=run.get('group_policy','ALL'),started=run['started'],completed=int(self.clock()*1000),action=run['action'],rows=copy.deepcopy(run['rows']),settings=copy.deepcopy(settings),observations=copy.deepcopy(run['observations']),invalidation=copy.deepcopy(run['invalidation']),monitor='local server'))
         if plan.get('enabled'):
             candles=closed(self._market(plan['timeframe']));tracker=Structure(plan['sensitivity'])
@@ -246,6 +250,14 @@ class ConditionRun:
                 body['volume']=round(math.floor(raw/data['volume_step'])*data['volume_step'],8)
                 if body['volume']<data['volume_min']:raise ValueError('Minimum lot exceeds the 2% risk budget.')
             result=self.terminal.preview(body)
+        if body['condition_entry_quality'].get('enabled'):
+            quote=self._market('M1')
+            if self._check_invalidation(quote):
+                self.terminal.previews.pop(result['preview'],None);return
+            request=result['request'];quality_entry=(quote['ask'] if body['side']=='BUY' else quote['bid']) if result.get('order_kind')=='MARKET' else float(request['price'])
+            try:run['entry_quality_result']=check_quality(body['condition_entry_quality'],quality_entry,float(request['sl']),float(request['tp']),body['side'],quote.get('point',0),result.get('order_kind')=='MARKET')
+            except EntryQualitySkipped:
+                self.terminal.previews.pop(result['preview'],None);raise
         if (result['account'],result['server'])!=(run['account'],run['server']):raise ValueError('Account changed during order preparation.')
         if run['_cancel'].is_set():
             self.terminal.previews.pop(result['preview'],None);self.stop();return
@@ -262,6 +274,8 @@ class ConditionRun:
     def record_submission(self,body,result=None,error=None):
         run=self.run
         if not run or run['phase']!='review' or body.get('preview')!=run['review']['preview']:return
+        if isinstance(error,EntryQualitySkipped):
+            run['review']=None;run['sent']=False;self._finish(str(error)+' Start explicitly for a new setup.','skipped');return
         if isinstance(error,ConditionInvalidated):self._check_invalidation(dict(bid=error.bid,quote_time=self.clock()));return
         run['review']=None;run['result']=copy.deepcopy(result)
         self._finish('Finished: '+(str(error)+' Check MT5. No automatic retry.' if error else f'broker {result["retcode"]}: {result["comment"]}. Check MT5 for final execution status.'))
@@ -376,4 +390,4 @@ class ConditionMonitor:
         if not runner:return
         runner.record_submission(body,result,error)
         if result and result.get('retcode') in (10008,10009,10010):self._stop_linked(runner)
-        elif error and not isinstance(error,ConditionInvalidated):self._stop_linked(runner,uncertain=True)
+        elif error and not isinstance(error,(ConditionInvalidated,EntryQualitySkipped)):self._stop_linked(runner,uncertain=True)
