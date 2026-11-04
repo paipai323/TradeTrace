@@ -711,7 +711,7 @@
   el('chart').addEventListener('pointercancel',()=>{finishConditionDrag(true);finishOrderDrag(true);finishDrawingDrag(true);},true);
   const C=window.TerminalConditions;
   let conditionRun=null,conditionBusy=false,conditionDraftScope='',conditionFinished='',conditionLastResult='',conditionApplied=null,conditionDraftValid=true;
-  const conditionMessage=message=>{if(el('condition-status').textContent!==message)el('condition-status').textContent=message;const phase=serverMonitorActive()?(serverMonitor.phase==='review'?'Review':'Running'):conditionFinished?(conditionFinished.startsWith('Invalidated')?'Invalidated':conditionFinished.startsWith('Skipped')?'Skipped':'Finished'):conditionBusy?'Finishing':message.startsWith('Stopped')?'Stopped':'Draft';el('setup-phase').textContent=phase;el('setup-phase').dataset.phase=phase.toLowerCase();el('condition-stop').disabled=!serverMonitorActive()&&!conditionBusy;el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;};
+  const conditionMessage=message=>{if(el('condition-status').textContent!==message)el('condition-status').textContent=message;const phase=serverMonitorActive()?(serverMonitor.phase==='review'?'Review':'Running'):serverMonitor?.phase==='saved'?'Saved':serverMonitor?.phase==='stopped'&&serverMonitor.interruption?.enabled?'Interrupted':conditionFinished?(conditionFinished.startsWith('Invalidated')?'Invalidated':conditionFinished.startsWith('Skipped')?'Skipped':'Finished'):conditionBusy?'Finishing':message.startsWith('Stopped')?'Stopped':'Draft';el('setup-phase').textContent=phase;el('setup-phase').dataset.phase=phase.toLowerCase();el('condition-stop').disabled=!serverMonitorActive()&&!conditionBusy;el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;};
   const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
   function detachConditions(message){serverStateKey='' ;if(serverMonitorActive()){conditionMessage(`${serverMonitor.symbol} · server monitoring continues. Reconnecting the display does not stop it.`);return;}conditionRun=null;if(conditionApplied?.state==='running')conditionApplied.state='stopped';if(el('condition-status'))conditionMessage(conditionFinished||message);renderConditionProgress();}
   function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high','sensitivity'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
@@ -752,17 +752,19 @@
   for(const name of ['sizing','timeout','gap'])el('condition-'+name).addEventListener('change',saveConditions);
   for(const name of ['timeout','gap'])el('condition-'+name).addEventListener('input',renderConditionValidation);
   el('condition-sizing').addEventListener('change',()=>{ticketEstimateVersion++;ticketEstimatePending=false;clearTimeout(ticketEstimateTimer);ticketEstimate=null;ticketEstimateKey='';ticketEstimateAt=0;invalidate();syncDraftLines();});
-  el('condition-action').onchange=()=>{el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';renderConditionComparison();};
+  el('condition-action').onchange=()=>{syncConditionStartLabel();renderConditionComparison();};
   el('conditions-panel').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT')event.preventDefault();});
+  const monitorEstimates=new Map(),monitorEstimateOpen=new Set();let monitorEstimateBusy='';
   let serverRegistryId='',serverSnapshotRevision=-1,serverMonitors=[],selectedMonitorId=null,serverMonitor=null,serverPollBusy=false,serverReviewShown='',serverStateKey='',serverDetachedId='';
   function serverMonitorActive(){return !!serverMonitor&&['running','review','finishing'].includes(serverMonitor.phase);}
   function receiveServerConditions(payload){
+    if(payload.storage_warning!==undefined){const warning=el('monitor-storage-status');if(warning.textContent!==payload.storage_warning)warning.textContent=payload.storage_warning;warning.hidden=!payload.storage_warning;}
     if(payload.registry_id){
       if(payload.registry_id===serverRegistryId&&payload.snapshot_revision<serverSnapshotRevision)return;
-      if(serverRegistryId&&payload.registry_id!==serverRegistryId){serverMonitors=[];serverMonitor=null;selectedMonitorId=null;serverStateKey='';invalidate();}
+      if(serverRegistryId&&payload.registry_id!==serverRegistryId){serverMonitors=[];monitorEstimates.clear();monitorEstimateOpen.clear();serverMonitor=null;selectedMonitorId=null;serverStateKey='';invalidate();}
       serverRegistryId=payload.registry_id;serverSnapshotRevision=payload.snapshot_revision;
     }
-    if(Array.isArray(payload.runs))serverMonitors=payload.runs;
+    if(Array.isArray(payload.runs)){serverMonitors=payload.runs;const ids=new Set(serverMonitors.map(run=>run.id));for(const id of monitorEstimates.keys())if(!ids.has(id)){monitorEstimates.delete(id);monitorEstimateOpen.delete(id);}}
     else if(payload.run){const index=serverMonitors.findIndex(r=>r.id===payload.run.id);if(index<0)serverMonitors.push(payload.run);else serverMonitors[index]=payload.run;}
     if(selectedMonitorId===null&&payload.run)selectedMonitorId=payload.run.id;
     const run=selectedMonitorId===null?payload.run:serverMonitors.find(r=>r.id===selectedMonitorId)||null;
@@ -789,7 +791,7 @@
         saveConditions();renderConditionProgress();
       }
       conditionMessage((same?'':`${run.symbol} · account ${run.account} · `)+run.message);
-      el('setup-phase').textContent=run.phase==='review'?'Review':run.phase==='running'?'Running':run.phase==='stopped'?'Stopped':run.phase==='invalidated'?'Invalidated':run.phase==='skipped'?'Skipped':'Finished';
+      el('setup-phase').textContent=run.phase==='review'?'Review':run.phase==='running'?'Running':run.phase==='saved'?'Saved':run.phase==='stopped'?(run.interruption?.enabled?'Interrupted':'Stopped'):run.phase==='invalidated'?'Invalidated':run.phase==='skipped'?'Skipped':'Finished';
     }
     if(run.phase==='review'&&same&&run.review&&run.review.preview!==serverReviewShown){
       const result=run.review;serverReviewShown=result.preview;
@@ -878,8 +880,8 @@
   const structureKey=tf=>JSON.stringify([scope,el('symbol').value,tf]);
   function rememberStructureHistory(tf,data){
     const key=structureKey(tf),candles=data.bars.slice(0,-1).map(b=>({time:b[0]/1000,open:b[1],high:b[2],low:b[3],close:b[4]}));
-    const prior=structureHistories.get(key);if(prior?.last===candles.at(-1)?.time){prior.fetched=Date.now();return;}
-    structureHistories.set(key,{candles,last:candles.at(-1)?.time,fetched:Date.now(),analyses:new Map()});
+    const prior=structureHistories.get(key);if(prior?.last===candles.at(-1)?.time){prior.fetched=Date.now();prior.formingTime=data.bars.at(-1)?.[0]/1000;prior.quoteTime=data.quote_time;return;}
+    structureHistories.set(key,{candles,last:candles.at(-1)?.time,formingTime:data.bars.at(-1)?.[0]/1000,quoteTime:data.quote_time,fetched:Date.now(),analyses:new Map()});
     if(structureHistories.size>40)structureHistories.delete(structureHistories.keys().next().value);
   }
   function draftStructure(row){
@@ -892,6 +894,7 @@
   function loadStructureDrafts(){
     if(!market)return;
     const guard=readInvalidation(),frames=conditionRows().filter(row=>C.structure(row.rule)).map(row=>row.timeframe);if(guard.enabled&&guard.source==='SWING')frames.push(guard.timeframe);
+    if(serverMonitor?.scope===scope&&serverMonitor.symbol===el('symbol').value&&serverMonitor.phase==='running'){const active=serverMonitor.rows[serverMonitor.applied.index];if(active?.mode==='CANDLE')frames.push(active.timeframe);}
     for(const tf of new Set(frames)){
       if(tf===el('timeframe').value)continue;
       const key=structureKey(tf);if(structureRequests.has(key)||Date.now()-(structureHistories.get(key)?.fetched||0)<1500)continue;
@@ -902,17 +905,29 @@
       }).catch(()=>{if(scope===requestScope&&el('symbol').value===symbol)structureHistories.set(key,{error:'Completed candles unavailable; check broker history',fetched:Date.now()});}).finally(()=>structureRequests.delete(key));
     }
   }
+  function matchingAppliedCondition(row,index){return serverMonitor?.id!==serverDetachedId&&serverMonitor?.scope===scope&&serverMonitor.symbol===el('symbol').value&&conditionSignature(row)===conditionSignature(serverMonitor.rows[index])&&(!row?.id||row.id===serverMonitor.rows[index]?.id);}
+  function renderConditionWaiting(){
+    let message='';const run=serverMonitor;
+    if(run&&run.id!==serverDetachedId&&run.scope===scope&&run.symbol===el('symbol').value&&run.phase==='running'){
+      const row=run.rows[run.applied.index],history=row?structureHistories.get(structureKey(row.timeframe)):null;
+      message=C.waitingDescription(row,run.structureState,{digits:market?.digits,now:Date.now()/1000,formingTime:history?.formingTime,quoteTime:history?.quoteTime});
+      if(row&&conditionSignature(conditionRows()[run.applied.index])!==conditionSignature(row))message+=' Uses applied settings; draft edits are not active.';
+    }
+    for(const id of ['condition-waiting','monitor-waiting']){const node=el(id);if(node.textContent!==message)node.textContent=message;node.hidden=!message;}
+  }
   function conditionChartItems(){
     if(!market||!main||conditionDraftScope!==conditionStorage())return [];
-    const items=[...el('condition-list').children].flatMap((row,index)=>{
+    const drafts=conditionRows(),items=[...el('condition-list').children].flatMap((row,index)=>{
       if(row.dataset.visible==='false')return [];
       const rule=conditionInput(row,'rule').value,zone=C.zone(rule);
       if(C.structure(rule)){
-        const draft=conditionRows()[index];if(Object.keys(C.fieldErrors(draft)).length)return [];
+        const draft=drafts[index];if(Object.keys(C.fieldErrors(draft)).length)return [];
         if(!el('condition-show-levels').checked&&row!==selectedConditionRow)return [];
-        const active=conditionRun?.scope===scope&&conditionRun.symbol===el('symbol').value&&conditionRun.sequence.index===index&&conditionSignature(draft)===conditionSignature(conditionRun.sequence.rows[index]);
-        const model=active&&conditionRun.sequence.structureState?conditionRun.sequence.structureState:draftStructure(draft),price=model.level,y=price?main.priceToCoordinate(price):null;
-        return price>0&&!model.broken&&Number.isFinite(y)?[{row,index,field:'structure',price,y,color:'#bba2ff',readonly:true,label:`${C.rules[rule]} ${conditionInput(row,'timeframe').value}`}]:[];
+        const applied=matchingAppliedCondition(draft,index),passed=applied&&index<serverMonitor.applied.index?serverMonitor.observations?.findLast(event=>event.type==='passed'&&event.index===index&&event.structure):null;
+        const active=applied&&serverMonitor.phase==='running'&&serverMonitor.applied.index===index&&serverMonitor.structureState;
+        const model=passed?{level:passed.structure.level,broken:false}:active?serverMonitor.structureState:draftStructure(draft),price=model.level,y=price?main.priceToCoordinate(price):null;
+        const levelState=passed?'passed':active?'tracking':'draft',behavior=passed?'Passed · fixed':active?'Tracking · may move':'Draft preview · may move';
+        return price>0&&!model.broken&&Number.isFinite(y)?[{row,index,field:'structure',price,y,color:passed?'#70d7b7':'#bba2ff',readonly:true,levelState,label:`${C.rules[rule]} ${conditionInput(row,'timeframe').value} · ${behavior}`}]:[];
       }
       if(!(zone?el('condition-show-zones'):el('condition-show-levels')).checked&&row!==selectedConditionRow)return [];
       const low=Number(conditionInput(row,'low').value),high=Number(conditionInput(row,'high').value);
@@ -920,12 +935,13 @@
       const color=row===selectedConditionRow?'#e4bd70':'#78a7ff';
       return (zone?['low','high','zone']:['level']).flatMap(field=>{
         const price=field==='zone'?(low+high)/2:Number(conditionInput(row,field).value),y=main.priceToCoordinate(price);
-        return price>0&&Number.isFinite(y)?[{row,index,field,price,y,color,low,high}]:[];
+        const applied=matchingAppliedCondition(drafts[index],index),passed=applied&&index<serverMonitor.applied.index;
+        return price>0&&Number.isFinite(y)?[{row,index,field,price,y,color,low,high,levelState:passed?'passed':applied?'fixed':'draft',behavior:passed?'Passed · fixed':applied?'Applied · fixed at Start':'Draft'}]:[];
       });
     });
     const applied=serverMonitor?.id!==serverDetachedId&&serverMonitor?.scope===scope&&serverMonitor.symbol===el('symbol').value&&(['running','review'].includes(serverMonitor.phase)||serverMonitor.phase==='invalidated')?serverMonitor.invalidation:null;
     const guard=applied?.enabled?applied:invalidationPreview(),y=guard.level?main.priceToCoordinate(guard.level):null;
-    if(el('invalidation-visible').checked&&guard.enabled&&guard.level>0&&Number.isFinite(y))items.push({row:null,index:-1,field:'invalidation',price:guard.level,y,color:'#ff7888',readonly:true,guard:true,label:`${applied?'Applied cancellation':'Draft cancellation'} ${guard.direction==='BELOW'?'≤':'≥'}`});
+    if(el('invalidation-visible').checked&&guard.enabled&&guard.level>0&&Number.isFinite(y))items.push({row:null,index:-1,field:'invalidation',price:guard.level,y,color:'#ff7888',readonly:true,guard:true,levelState:applied?'frozen':'draft',label:`${applied?'Frozen at Start · cancellation':'Draft cancellation'} ${guard.direction==='BELOW'?'≤':'≥'}`});
     return items;
   }
   function renderConditionPreviews(ctx,size){
@@ -940,19 +956,19 @@
       const key=`${item.index}:${item.field}`;visible.add(key);
       let button=conditionHandleNodes.get(key);
       if(!button){button=text('button','','terminal-condition-handle');button.type='button';button.dataset.conditionGrip=item.field;button.onpointerdown=event=>startConditionDrag(event,button._condition);el('ticket-handles').append(button);conditionHandleNodes.set(key,button);}
-      button._condition=item;button.style.setProperty('--condition-color',item.color);
+      button.dataset.levelState=item.levelState||'draft';button._condition=item;button.style.setProperty('--condition-color',item.color);
       button.style.top=Math.max(0,Math.min(size.height-25,item.y-12))+'px';
-      const label=item.guard?`${item.label} · ${item.price.toFixed(market.digits)}`:`C${item.index+1} ${item.readonly?item.label:item.field==='zone'?'Move zone':item.field==='level'?'Level':item.field==='low'?'Zone low':'Zone high'} · ${item.price.toFixed(market.digits)}`;
+      const label=item.guard?`${item.label} · ${item.price.toFixed(market.digits)}`:`C${item.index+1} ${item.readonly?item.label:item.field==='zone'?'Move zone':item.field==='level'?'Level':item.field==='low'?'Zone low':'Zone high'}${!item.readonly?' · '+item.behavior:''} · ${item.price.toFixed(market.digits)}`;
       if(button.textContent!==label)button.textContent=label;
       button.style.left=Math.max(0,Math.min(item.field==='zone'?180:8,size.width-button.offsetWidth-4))+'px';
-      button.title=item.guard?'Cancellation level; click to inspect invalidation settings. Not an order stop loss.':item.readonly?'Calculated confirmed swing. Change timeframe or sensitivity in Conditions.':'Drag to change this condition draft. Start is required to apply changes to monitoring.';button.style.cursor=item.readonly?'pointer':'';
+      button.title=item.guard?(item.levelState==='frozen'?'Frozen cancellation from Start; later swings and draft edits do not move it. ':'Draft cancellation recalculated when Start is clicked. ')+'Click to inspect settings. Not an order stop loss.':item.readonly?(item.levelState==='passed'?'Passed break price, fixed from the recorded signal. ':item.levelState==='tracking'?'Tracking: this level may change as confirmed swings form. ':'Draft preview only, not the active server tracker. ')+'Calculated confirmed swing. A completed candle close is required; wicks do not count.':'Drag to change this condition draft. Start is required to apply changes to monitoring.';button.style.cursor=item.readonly?'pointer':'';
     }
     for(const [key,node] of conditionHandleNodes)if(!visible.has(key)){node.remove();conditionHandleNodes.delete(key);}
     ctx.restore();
   }
   function conditionLineHit(p){return conditionChartItems().filter(item=>!item.readonly&&item.row===selectedConditionRow&&item.field!=='zone'&&Math.abs(item.y-p.y)<=6).sort((a,b)=>Math.abs(a.y-p.y)-Math.abs(b.y-p.y))[0];}
   function startConditionDrag(event,item){
-    if(event.button!==0||!market||!item)return;if(item.readonly){event.preventDefault();event.stopPropagation();if(item.guard){el('invalidation-settings').open=true;if(!el('invalidation-level').disabled)el('invalidation-level').focus();}else selectCondition(item.row);return;}
+    if(event.button!==0||!market||!item)return;if(item.readonly){event.preventDefault();event.stopPropagation();if(item.guard){if(!el('quick-editor').open){openSetupBuilder('entry');if(!el('setup-builder').classList.contains('builder-advanced'))el('builder-mode').click();}el('invalidation-settings').open=true;if(!el('invalidation-level').disabled)el('invalidation-level').focus();}else selectCondition(item.row);return;}
     setTool('cursor');selectCondition(item.row);selectDrawing(-1);
     const original=Object.fromEntries(['level','low','high'].map(field=>[field,conditionInput(item.row,field).value]));
     const y=event.clientY-el('chart').getBoundingClientRect().top;
@@ -1179,7 +1195,7 @@
     return `${C.rules[row.rule]||'Choose rule'} · ${price} · ${row.mode==='LIVE'?'Live Bid':row.timeframe+' candle'}`;
   }
   function renderConditionComparison(){
-    renderConditionPreview();renderInvalidationControls();renderEntryQualityControls();renderSetupReadiness();renderBuilderSummary();
+    renderConditionPreview();renderInvalidationControls();renderEntryQualityControls();renderSetupReadiness();renderBuilderSummary();renderConditionWaiting();
     const applied=conditionApplied,draft=conditionRows(),currentSettings=comparisonSettings(conditionComparisonSettings()),appliedSettings=comparisonSettings(applied?.settings);
     const key=JSON.stringify([applied,draft.map(({visible,...row})=>row),currentSettings]);if(key===conditionComparisonKey)return;conditionComparisonKey=key;
     const pairs=[];let changes=0;
@@ -1441,26 +1457,113 @@
 
   function readMonitorSettings(){return {name:el('monitor-name').value.trim(),group:el('monitor-group').value.trim(),group_policy:el('monitor-policy').value};}
   function setMonitorSettings(value={}){el('monitor-name').value=value.name||'';el('monitor-group').value=value.group||'';el('monitor-policy').value=value.group_policy==='FIRST_ENTRY'?'FIRST_ENTRY':'ALL';}
-  function renderMonitorList(){
-    const active=serverMonitors.filter(r=>['running','review','finishing'].includes(r.phase));el('monitor-count').textContent=`${active.length} active`;
-    el('monitor-stop-all').disabled=!active.length;el('monitor-add').disabled=conditionBusy||submitting||reviewing||closing;
-    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing]));
-    if(el('monitor-list').dataset.key===key)return;el('monitor-list').dataset.key=key;
-    const cards=serverMonitors.slice().reverse().map(run=>{
-      const card=text('article','','terminal-monitor-card');card.dataset.monitorId=run.id;card.dataset.selected=String(run.id===selectedMonitorId);
-      card.append(text('strong',run.name||`${run.symbol} setup`),text('span',`${run.symbol} · ${run.settings.ticket.side} · ${run.action} · ${run.phase} · ${run.applied.index}/${run.rows.length}`,'terminal-monitor-meta'));
-      card.append(text('span',`${run.settings.autoPlan?.enabled?'Risk '+run.settings.autoPlan.risk+'%':run.settings.sizing==='AUTO'?'Risk 2%':'Lots '+run.settings.ticket.volume}${run.invalidation?.enabled?' · Cancel Bid '+(run.invalidation.direction==='BELOW'?'≤':'≥')+' '+run.invalidation.level:''}`,'terminal-monitor-meta'));
-      if(run.group)card.append(text('span',`${run.group} · ${run.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`,'terminal-monitor-meta'));
-      card.append(text('p',run.message));const actions=document.createElement('div'),open=text('button',run.phase==='review'?'Open review':'Open setup'),stop=text('button','Stop');open.type=stop.type='button';
-      open.disabled=run.scope!==scope||conditionBusy||submitting||reviewing||closing;open.onclick=()=>openMonitoredSetup(run.id);
-      stop.disabled=!['running','review','finishing'].includes(run.phase);stop.onclick=async()=>{try{receiveServerConditions(await call('terminal/conditions/stop',{id:run.id}));}catch(error){conditionMessage('Stop not confirmed: '+error.message);}};
-      actions.append(open,stop);card.append(actions);return card;
-    });
-    if(!cards.length)cards.push(text('p','No server setups yet. Configure a draft and click Start.','terminal-muted'));el('monitor-list').replaceChildren(...cards);
+  function fillMonitorEstimate(details,run){
+    const body=details.querySelector('.terminal-monitor-estimate-body'),cached=monitorEstimates.get(run.id),estimate=cached?.value;body.replaceChildren();
+    if(estimate){
+      const status={would_pass:'Would pass local checks',would_skip:'Would skip at this quote',unavailable:'Not enough information',alert:'Alerts only'}[estimate.status]||'Unavailable';
+      const badge=text('strong',status,'terminal-estimate-outcome');badge.dataset.outcome=estimate.status;body.append(badge);
+      const price=value=>Number.isFinite(value)?value.toFixed(estimate.digits??5):'—',money=value=>Number.isFinite(value)?value.toFixed(2)+' '+(estimate.currency||''):'—';
+      if(Number.isFinite(estimate.entry))body.append(text('p',`${estimate.side} ${estimate.order_kind} · entry ${price(estimate.entry)} · SL ${price(estimate.sl)} · TP ${price(estimate.tp)}`));
+      if(Number.isFinite(estimate.volume))body.append(text('p',`${estimate.volume} lots · modeled risk ${money(estimate.risk)}${Number.isFinite(estimate.risk_percent)?' ('+estimate.risk_percent.toFixed(2)+'% equity)':''}`));
+      if(Number.isFinite(estimate.rr))body.append(text('p',`Available RR 1:${estimate.rr.toFixed(2)}${estimate.min_rr>0?' · minimum 1:'+estimate.min_rr:''}`));
+      if(estimate.quality_target>0)body.append(text('p',`Available RR uses the nearer of TP and ${price(estimate.quality_target)}.`));
+      if(Number.isFinite(estimate.distance))body.append(text('p',`Distance ${price(estimate.distance)} · maximum ${estimate.max_distance} price units`));
+      body.append(text('p',estimate.reason||''));const age=text('small','','terminal-estimate-age');age.dataset.received=cached.received;age.dataset.at=estimate.at;body.append(age);
+    }else body.append(text('p',monitorEstimateBusy===run.id?'Calculating from frozen settings…':'Expand to calculate from the current broker quote.'));
+    body.append(text('p','Estimate only—conditions have not passed. Recalculated at execution; final broker checks still apply.','terminal-muted'));
+    const refresh=text('button',monitorEstimateBusy===run.id?'Calculating…':'Refresh estimate');refresh.type='button';refresh.disabled=!!monitorEstimateBusy||run.scope!==scope;refresh.onclick=()=>loadMonitorEstimate(run.id);body.append(refresh);
+    updateMonitorEstimateAges();
   }
-  async function openMonitoredSetup(id){
+  function updateMonitorEstimateAges(){for(const node of el('monitor-list').querySelectorAll('.terminal-estimate-age')){const age=Math.max(0,Math.floor(Math.max(Date.now()-Number(node.dataset.received),Date.now()-Number(node.dataset.at))/1000)),value=`As of ${new Date(Number(node.dataset.at)).toLocaleTimeString([], {hour12:false})} local${age>15?' · Old estimate—refresh before relying on it':''}`;if(node.textContent!==value)node.textContent=value;node.closest('details').dataset.stale=String(age>15);}}
+  async function loadMonitorEstimate(id){
+    if(monitorEstimateBusy)return;const run=serverMonitors.find(run=>run.id===id);if(!run||run.scope!==scope||run.phase!=='running')return;
+    monitorEstimateBusy=id;for(const detail of el('monitor-list').querySelectorAll('[data-estimate-id]')){const item=serverMonitors.find(run=>run.id===detail.dataset.estimateId);if(item)fillMonitorEstimate(detail,item);}
+    try{const result=await call('terminal/conditions/estimate',{id});if(!result.estimate)throw Error('Server did not return an estimate. Restart TradeTrace to load the updated server.');monitorEstimates.set(id,{value:result.estimate,received:Date.now()});}
+    catch(error){monitorEstimates.set(id,{value:{status:'unavailable',at:Date.now(),reason:error.message},received:Date.now()});}
+    finally{monitorEstimateBusy='';for(const detail of el('monitor-list').querySelectorAll('[data-estimate-id]')){const item=serverMonitors.find(run=>run.id===detail.dataset.estimateId);if(item)fillMonitorEstimate(detail,item);}}
+  }
+  function recoveryDescription(run){
+    const info=run.interruption;if(!info)return '';const stamp=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString()+' local':'unavailable';
+    const seconds=Math.max(0,Math.round(info.gap_seconds)),gap=seconds>=3600?`${Math.floor(seconds/3600)}h ${Math.floor(seconds%3600/60)}m ${seconds%60}s`:seconds>=60?`${Math.floor(seconds/60)}m ${seconds%60}s`:`${seconds}s`;
+    return `${info.recovery_message} Last fresh quote: ${stamp(info.last_quote_time)}. Gap at detection: ${gap}.${info.ready?' Fresh quote now: '+stamp(info.current_quote_time)+'.':''} Every step starts over only after your explicit Start.`;
+  }
+  async function reviewInterruptedSetup(id){
+    if(conditionBusy||submitting||reviewing||closing)return;
+    try{const payload=await call('terminal/conditions/recovery',{id});receiveServerConditions(payload);const run=serverMonitors.find(run=>run.id===id);
+      if(!run?.interruption?.ready||run.phase!=='stopped')return;
+      await openMonitoredSetup(id);if(selectedMonitorId===id){openSetupBuilder('review');syncConditionStartLabel();renderBuilderSummary();}
+    }catch(error){conditionMessage('Review unavailable: '+error.message);}
+  }
+  function syncConditionStartLabel(){el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';}
+  function showMonitorWorkspace(){
+    const panel=el('monitor-workspace');panel.hidden=false;panel.classList.add('is-expanded');el('monitors-panel').open=true;
+    el('monitor-workspace-close').focus({preventScroll:true});
+  }
+  el('monitor-workspace-open').onclick=()=>showMonitorWorkspace();
+  function hideMonitorWorkspace(){el('monitor-workspace').hidden=true;el('monitor-workspace').classList.remove('is-expanded');el('monitor-workspace-open').focus({preventScroll:true});}
+  el('monitor-workspace-close').onclick=hideMonitorWorkspace;
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!el('setup-builder').open&&!el('monitor-workspace').hidden)hideMonitorWorkspace();});
+  function renderMonitorList(){
+    const active=serverMonitors.filter(r=>['running','review','finishing'].includes(r.phase)),saved=serverMonitors.filter(r=>r.phase==='saved');el('monitor-count').textContent=`${active.length} active${saved.length?' · '+saved.length+' saved':''}`;
+    el('monitor-overview').textContent=el('monitor-count').textContent+' · all symbols';
+    el('monitor-stop-all').disabled=!active.length&&!saved.length;el('monitor-add').disabled=conditionBusy||submitting||reviewing||closing;
+    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview,r.interruption?.checked_at,r.interruption?.enabled]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing]));
+    if(el('monitor-list').dataset.key===key)return;el('monitor-list').dataset.key=key;
+    const previousHistory=el('monitor-list').querySelector('.terminal-monitor-history'),historyOpen=previousHistory?.open===true;
+    const liveCards=[],attentionCards=[],historyCards=[];
+    const cards=serverMonitors.slice().reverse().sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(run=>{
+      const card=text('article','','terminal-monitor-card');card.dataset.monitorId=run.id;card.dataset.selected=String(run.id===selectedMonitorId);
+      card.dataset.phase=run.phase;card.dataset.symbol=run.symbol;
+      const live=['running','review','finishing'].includes(run.phase),attention=run.phase==='saved'||(run.interruption?.enabled&&run.phase==='stopped');
+      (live?liveCards:attention?attentionCards:historyCards).push(card);
+      const heading=text('div','','terminal-monitor-heading'),status=run.phase==='running'?'Monitoring':run.phase==='review'?'Review needed':run.phase==='finishing'?'Submitting':run.phase==='saved'?'Saved · not armed':attention?'Interrupted':run.phase;
+      heading.append(text('strong',`${run.symbol} · ${run.settings.ticket.side}`),text('span',status,'terminal-monitor-badge'));card.append(heading);
+      card.append(text('span',(run.name||`${run.symbol} setup`)+(run.id===selectedMonitorId?' · Selected':''),'terminal-monitor-name'));
+      const row=run.rows[run.applied.index];
+      if(row)card.append(text('strong',`Step ${run.applied.index+1} of ${run.rows.length} · ${row.mode==='CANDLE'?row.timeframe+' · ':''}${C.rules[row.rule]||row.rule}`,'terminal-monitor-rule'));
+      const facts=text('div','','terminal-monitor-facts');
+      facts.append(text('span',run.action==='AUTO'?'Automatic entry':run.action==='REVIEW'?'Review before entry':'Alert only'),text('span',run.settings.autoPlan?.enabled?'Risk '+run.settings.autoPlan.risk+'%':run.settings.sizing==='AUTO'?'Risk 2%':'Lots '+run.settings.ticket.volume));card.append(facts);
+      if(run.invalidation?.enabled)card.append(text('span',(run.phase==='saved'?'Previous cancellation: Bid ':'Cancel if Bid ')+(run.invalidation.direction==='BELOW'?'≤ ':'≥ ')+run.invalidation.level,'terminal-monitor-cancel'));
+      if(run.group)card.append(text('span',`${run.group} · ${run.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`,'terminal-monitor-meta'));
+      card.append(text('p',run.phase==='running'?C.waitingDescription(run.rows[run.applied.index],run.structureState,{digits:run.symbol===el('symbol').value?market?.digits:undefined}):run.message,'terminal-monitor-waiting-text'));const actions=document.createElement('div'),open=text('button',run.phase==='review'?'Open review':'Open setup'),stop=text('button',run.phase==='saved'?'Dismiss saved':'Stop');open.type=stop.type='button';
+      open.disabled=run.scope!==scope||conditionBusy||submitting||reviewing||closing;open.onclick=()=>openMonitoredSetup(run.id);
+      stop.disabled=!['running','review','finishing','saved'].includes(run.phase);stop.onclick=async()=>{try{receiveServerConditions(await call('terminal/conditions/stop',{id:run.id}));}catch(error){conditionMessage('Stop not confirmed: '+error.message);}};
+      if(run.phase==='saved'){const resume=text('button','Review saved setup');resume.type='button';resume.disabled=run.scope!==scope||conditionBusy||submitting||reviewing||closing;resume.onclick=async()=>{await openMonitoredSetup(run.id);if(selectedMonitorId===run.id){openSetupBuilder('review');syncConditionStartLabel();renderBuilderSummary();}};card.append(resume);}
+      if(run.interruption?.enabled&&run.phase==='stopped'){
+        const recovery=text('div','','terminal-monitor-recovery');recovery.append(text('strong',run.interruption.ready?'Connection restored—review and restart':'Monitoring interrupted'),text('p',recoveryDescription(run)));
+        const check=text('button','Check connection'),restart=text('button','Review & restart');check.type=restart.type='button';
+        check.disabled=run.scope!==scope;restart.disabled=!run.interruption.ready||run.scope!==scope||conditionBusy||submitting||reviewing||closing;
+        check.onclick=async()=>{check.disabled=true;try{receiveServerConditions(await call('terminal/conditions/recovery',{id:run.id}));}catch(error){conditionMessage('Recovery check failed: '+error.message);}finally{check.disabled=false;}};
+        restart.onclick=()=>reviewInterruptedSetup(run.id);recovery.append(check,restart);card.append(recovery);
+      }
+      actions.className='terminal-monitor-row-actions';
+      const view=text('button','View on chart');view.type='button';view.disabled=open.disabled;view.onclick=async()=>{await openMonitoredSetup(run.id,false);if(selectedMonitorId===run.id){hideMonitorWorkspace();}};
+      open.title='Edit draft. Running settings change only after explicit Start.';
+      actions.append(open,stop,view);card.append(actions);
+      if(run.phase==='running'){
+        const details=document.createElement('details');details.className='terminal-monitor-estimate';details.dataset.estimateId=run.id;details.open=monitorEstimateOpen.has(run.id);
+        details.append(text('summary','If triggered now'),text('div','','terminal-monitor-estimate-body'));
+        details.addEventListener('toggle',()=>{if(!details.isConnected)return;if(details.open){monitorEstimateOpen.add(run.id);if(!monitorEstimates.has(run.id))loadMonitorEstimate(run.id);}else monitorEstimateOpen.delete(run.id);});
+        card.append(details);fillMonitorEstimate(details,run);
+      }
+      return card;
+    });
+    const symbolGroups=items=>{
+      const groups=new Map();
+      for(const card of items){const symbol=card.dataset.symbol;if(!groups.has(symbol))groups.set(symbol,[]);groups.get(symbol).push(card);}
+      return [...groups].map(([symbol,rows])=>{const group=text('section','','terminal-monitor-symbol-group');group.dataset.monitorSymbol=symbol;group.setAttribute('aria-label',symbol+' setups');group.append(text('h5',`${symbol} · ${rows.length} setup${rows.length===1?'':'s'}`),...rows);return group;});
+    };
+    const sections=[];
+    if(liveCards.length)sections.push(text('h4',`Monitoring now · ${liveCards.length}`),...symbolGroups(liveCards));
+    if(attentionCards.length)sections.push(text('h4',`Needs attention · ${attentionCards.length}`),...symbolGroups(attentionCards));
+    if(historyCards.length){const history=document.createElement('details');history.className='terminal-monitor-history';history.open=historyOpen;history.append(text('summary',`History · ${historyCards.length} stopped / completed`),...symbolGroups(historyCards));sections.push(history);}
+    if(!cards.length)sections.push(text('p','No server setups yet. Configure a draft and click Start.','terminal-muted'));
+    else if(!liveCards.length)sections.unshift(text('p','Nothing is actively monitoring.','terminal-monitor-empty'));
+    el('monitor-list').replaceChildren(...sections);updateMonitorEstimateAges();
+  }
+  async function openMonitoredSetup(id,showBuilder=true){
     let run=serverMonitors.find(r=>r.id===id);if(!run||run.scope!==scope||conditionBusy||submitting||reviewing||closing)return;
-    conditionBusy=true;updateTicket();
+    hideMonitorWorkspace();conditionBusy=true;updateTicket();
     try{
       if(el('symbol').value!==run.symbol){el('symbol').value=run.symbol;selectionChanged();const until=Date.now()+10000;while(!market&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,100));if(!market)throw Error('Chart is still loading. Try opening the setup again.');}
       if(run.scope!==scope||el('symbol').value!==run.symbol)throw Error('Account or symbol changed while opening the setup. Try again.');
@@ -1469,16 +1572,17 @@
       const settings=run.settings,ticket=settings.ticket;conditionHistorySuspended=true;el('condition-list').replaceChildren();
       for(const row of run.rows)conditionRow(row);
       setAutoPlan(settings.autoPlan);setEntryQuality(settings.entryQuality);setInvalidation(settings.invalidation);setMonitorSettings({name:run.name,group:run.group,group_policy:run.group_policy});
-      for(const name of ['sizing','timeout','gap','action'])el('condition-'+name).value=settings[name];
+      for(const name of ['sizing','timeout','gap','action'])el('condition-'+name).value=settings[name];syncConditionStartLabel();
       for(const name of ['side','order-kind','order-price','volume','sl','tp'])el(name).value=ticket[name]??'';
       conditionHistorySuspended=false;resetConditionUndo();saveConditions();updateOrderHint();syncDraftLines();selectSetupTab('conditions');
       receiveServerConditions({run,runs:serverMonitors});
-      if(!el('quick-editor').open)openSetupBuilder(run.phase==='review'?'review':'conditions');
+      if(showBuilder&&!el('quick-editor').open)openSetupBuilder(run.phase==='review'?'review':'conditions');
     }catch(error){conditionHistorySuspended=false;conditionMessage(error.message);}
     finally{conditionBusy=false;updateTicket();}
   }
   el('monitor-add').onclick=()=>{
     if(conditionBusy||submitting||reviewing||closing)return;
+    hideMonitorWorkspace();
     invalidate();selectedMonitorId='';serverMonitor=null;serverStateKey='';serverDetachedId='';serverReviewShown='';clearSetupDraft();renderMonitorList();
     conditionMessage('Independent draft. Existing monitors continue. Configure this setup, then Start.');
     if(!el('quick-editor').open)openSetupBuilder('conditions');
@@ -1590,7 +1694,7 @@
     // Keep the prepared layout when the classic editor is collapsed. Reopening
     // then only switches the visible step instead of moving dozens of controls.
     if(quickEditor.open)restoreQuickEditor();renderBuilderSummary();
-    if(chart){el('chart').scrollIntoView({block:'center'});el('chart').focus({preventScroll:true});}else if(builderFocus?.isConnected)builderFocus.focus({preventScroll:true});
+    if(chart){if(el('monitor-workspace').classList.contains('is-expanded')){hideMonitorWorkspace();}el('chart').scrollIntoView({block:'center'});el('chart').focus({preventScroll:true});}else if(builderFocus?.isConnected)builderFocus.focus({preventScroll:true});
   }
   function setBuilderStep(step,preparing=false){
     if(!el('setup-builder').open&&!preparing)return;builderStep=step;
@@ -1601,6 +1705,10 @@
     renderBuilderSummary(preparing);
   }
   function renderBuilderSummary(preparing=false){
+    const recovery=el('condition-recovery'),interrupted=serverMonitor?.id!==serverDetachedId&&serverMonitor?.phase==='stopped'&&serverMonitor?.interruption?.enabled&&serverMonitor.scope===scope&&serverMonitor.symbol===el('symbol').value;
+    const saved=serverMonitor?.id!==serverDetachedId&&serverMonitor?.phase==='saved'&&serverMonitor.scope===scope&&serverMonitor.symbol===el('symbol').value;
+    let savedText='';if(saved){const previous=serverMonitor.invalidation,proposed=invalidationPreview();savedText='Saved after server restart. Automatic entry is disarmed. Review, then explicitly Start; all steps begin again.';if(serverMonitor.saved?.uncertain)savedText+=' Previous submission outcome may be uncertain—check MT5 positions and pending orders before re-arming.';if(previous?.enabled)savedText+=' Previous frozen cancellation: '+comparisonPrice(previous.level)+'.';if(proposed.enabled)savedText+=' Proposed draft cancellation: '+(proposed.error|| (proposed.level?comparisonPrice(proposed.level):'waiting for current broker swing history'))+'. Recalculated at Start.';}
+    const recoveryText=saved?savedText:interrupted?recoveryDescription(serverMonitor):'';if(recovery.textContent!==recoveryText)recovery.textContent=recoveryText;recovery.hidden=!interrupted&&!saved;
     const sidebar=el('builder-draft-summary');if(!sidebar)return;
     const rows=conditionRows(),plan=readAutoPlan(),side=el('side').value,name=readMonitorSettings().name||'Unnamed draft';
     const setText=(node,value)=>{if(node.textContent!==value)node.textContent=value;};
@@ -1629,6 +1737,7 @@
   new MutationObserver(()=>{if(!el('pane').hidden){if(!running)connectWorkspace(true);else refresh();}}).observe(el('pane'),{attributes:true,attributeFilter:['hidden']});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){pollServerConditions();refresh();}});
   setInterval(()=>{if(!document.hidden)pollServerConditions();},2000);
+  setInterval(()=>{if(!document.hidden&&!el('pane').hidden)renderConditionWaiting();updateMonitorEstimateAges();},1000);
   pollServerConditions();
   window.addEventListener('DOMContentLoaded',()=>connectWorkspace(true));
   setInterval(()=>{if(!running&&!connecting&&!autoReconnectBlocked&&!document.hidden&&!el('pane').hidden&&Date.now()>=nextAutoConnect)connectWorkspace(true);else refresh();},2000);

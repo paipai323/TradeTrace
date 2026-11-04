@@ -137,3 +137,65 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 .terminal-builder-header,.terminal-builder-steps,.terminal-builder-footer{flex-shrink:0}#terminal-setup-builder #terminal-auto-plan[open]{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}#terminal-setup-builder #terminal-auto-plan>p,#terminal-setup-builder #terminal-auto-plan>summary{grid-column:1/-1}#terminal-setup-builder:not(.builder-advanced) #terminal-condition-starter-description{display:none}#terminal-builder-templates{border:1px solid #315045;border-radius:8px;padding:12px;margin-bottom:14px}#terminal-builder-templates>summary{cursor:pointer;font-size:12px;color:#a3e9d5}#terminal-builder-templates .terminal-condition-starters{margin-top:12px}@media(max-width:550px){#terminal-setup-builder #terminal-auto-plan[open]{grid-template-columns:1fr}}
 
 .terminal-builder-header{height:auto;min-height:100px}#terminal-setup-builder #terminal-auto-plan[open]{display:block}.terminal-builder-plan-fields{display:grid;grid-template-columns:1fr 1fr;gap:4px 16px}#terminal-setup-builder:not(.builder-advanced) #terminal-auto-plan>p:not(#terminal-auto-plan-status){display:none}@media(max-width:550px){.terminal-builder-plan-fields{grid-template-columns:1fr}}
+
+.terminal-condition-waiting{font-size:11px!important;line-height:1.7!important;color:#99ddcf!important}.terminal-condition-handle[data-level-state=passed]{--condition-color:#70d7b7}.terminal-condition-handle[data-level-state=tracking]{--condition-color:#bba2ff}
+
+.terminal-monitor-estimate{border:1px solid #2b4556;border-radius:6px;padding:8px;margin-top:5px;font-size:10px}.terminal-monitor-estimate>summary{cursor:pointer;color:#90ddc9}.terminal-monitor-estimate-body{display:grid;gap:7px;padding-top:10px}.terminal-setup-sidebar .terminal-monitor-estimate-body p{display:block!important;-webkit-line-clamp:unset;font-size:10px;line-height:1.6}.terminal-estimate-outcome[data-outcome=would_pass]{color:#79dbc0}.terminal-estimate-outcome[data-outcome=would_skip]{color:#edbd75}.terminal-estimate-age{font-size:9px;color:#94a9c0}.terminal-monitor-estimate[data-stale=true] .terminal-estimate-outcome{color:#94a9c0}
+
+#terminal-monitor-list:has(.terminal-monitor-estimate[open]){max-height:min(60vh,640px)}
+
+.terminal-monitor-recovery{display:grid!important;gap:8px!important;border:1px solid #6a5940;padding:10px;border-radius:6px;background:#272116;font-size:10px}.terminal-monitor-recovery strong{color:#edc587}.terminal-setup-sidebar .terminal-monitor-recovery p{display:block!important;-webkit-line-clamp:unset;line-height:1.7}.terminal-recovery-notice{font-size:11px!important;line-height:1.7!important;color:#edc587!important}.terminal-setup-status [data-phase=interrupted]{color:#edc587;border-color:#796441}
+
+.terminal-setup-status [data-phase=saved]{color:#a9c5f5;border-color:#55719c}#terminal-monitor-storage-status{overflow-wrap:anywhere}
+
+/* Keep monitoring readable using the sidebar's single scrollbar. */
+#terminal-monitor-list,#terminal-monitor-list:has(.terminal-monitor-estimate[open]){max-height:none;overflow:visible}
+#terminal-monitor-list>h4{font-size:12px;color:#c5d6e8;margin:16px 0 8px}
+.terminal-setup-sidebar .terminal-monitor-card{padding:12px 9px;margin:8px 0;border:1px solid #344b62;border-radius:7px;background:#121f2d;gap:8px}
+.terminal-setup-sidebar .terminal-monitor-card[data-selected=true]{border-left:3px solid #68dccb}
+.terminal-setup-sidebar .terminal-monitor-card p{display:block;overflow:visible;font-size:12px;line-height:1.6}
+.terminal-monitor-card>.terminal-monitor-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:7px;font-size:14px}
+.terminal-monitor-badge{font-size:11px;padding:3px 7px;border-radius:4px;background:#263a4f;color:#d6e4f3}
+.terminal-monitor-card[data-phase=running] .terminal-monitor-badge{background:#1d493e;color:#94efcf}
+.terminal-monitor-card[data-phase=review] .terminal-monitor-badge,.terminal-monitor-card[data-phase=saved] .terminal-monitor-badge{color:#ffd68c}
+.terminal-monitor-name{font-size:12px;color:#a5b9ce;overflow-wrap:anywhere}
+.terminal-monitor-rule{font-size:13px;line-height:1.5;color:#e4edf8}
+.terminal-monitor-card>.terminal-monitor-facts{flex-wrap:wrap;gap:6px 14px;font-size:12px;color:#b8cce0}
+.terminal-monitor-cancel{font-size:12px;color:#f2bdac;overflow-wrap:anywhere}
+.terminal-monitor-history{margin-top:16px;border-top:1px solid #344b62;padding-top:12px}
+.terminal-monitor-history>summary{cursor:pointer;font-size:12px;color:#a5b9ce}
+.terminal-monitor-empty{font-size:12px;color:#e7ca91}
+
+/* One shared monitoring view: docked under the chart or expanded for comparison. */
+.terminal-center>.terminal-monitor-workspace{flex:0 1 38%;min-height:110px;overflow:auto;margin:0;border-radius:0;border-width:1px 0 0;padding:10px 14px;background:#101b29}
+.terminal-monitor-workspace[hidden]{display:none!important}
+.terminal-monitor-workspace.is-expanded{position:fixed;inset:5vh 3vw;z-index:40;max-height:90vh;margin:0;border:1px solid #496782;border-radius:12px;box-shadow:0 12px 90px #000c;padding:18px;overflow:auto}
+.terminal-monitor-workspace>details>summary{font-size:15px;font-weight:600;cursor:pointer}
+.terminal-monitor-workspace .terminal-monitor-actions{flex-wrap:wrap;position:sticky;top:0;background:#101b29;padding:8px 0;z-index:2}
+.terminal-monitor-workspace .terminal-monitor-card{display:grid;grid-template-columns:minmax(150px,1fr) minmax(180px,2fr) minmax(130px,1fr);gap:7px 18px;padding:14px 10px;margin:0;border-bottom:1px solid #30445a;font-size:12px}
+.terminal-monitor-workspace .terminal-monitor-heading{grid-column:1;grid-row:1;justify-content:flex-start}
+.terminal-monitor-workspace .terminal-monitor-name{grid-column:1;grid-row:2}
+.terminal-monitor-workspace .terminal-monitor-rule{grid-column:2;grid-row:1}
+.terminal-monitor-workspace .terminal-monitor-waiting-text{grid-column:2;grid-row:2 / span 2;font-size:12px;line-height:1.6;display:block;overflow:visible}
+.terminal-monitor-workspace .terminal-monitor-facts{grid-column:3;grid-row:1;flex-wrap:wrap}
+.terminal-monitor-workspace .terminal-monitor-cancel{grid-column:3;grid-row:2}
+.terminal-monitor-workspace .terminal-monitor-row-actions{grid-column:1/-1;flex-wrap:wrap}
+.terminal-monitor-workspace .terminal-monitor-estimate,.terminal-monitor-workspace .terminal-monitor-recovery{grid-column:1/-1}
+.terminal-monitor-launch{border-top:1px solid #30445a;margin-top:16px;padding-top:8px}.terminal-monitor-launch button{width:100%}
+@media(max-width:1050px){.terminal-monitor-workspace .terminal-monitor-card{grid-template-columns:1fr 1fr}.terminal-monitor-workspace .terminal-monitor-facts,.terminal-monitor-workspace .terminal-monitor-cancel{grid-column:1;grid-row:auto}.terminal-monitor-workspace .terminal-monitor-row-actions{grid-column:1/-1}}
+@media(max-width:600px){.terminal-monitor-workspace.is-expanded{inset:2vh 2vw;max-height:96vh;padding:10px}.terminal-monitor-workspace .terminal-monitor-card{display:flex;flex-direction:column;gap:9px}.terminal-center>.terminal-monitor-workspace{flex-basis:40%}}
+
+/* Keep the overview bounded, with a close control independent of its details. */
+.terminal-center>.terminal-monitor-workspace{position:relative;flex:0 1 30%;max-height:300px;min-height:100px}
+.terminal-monitor-workspace>details>summary{padding-right:100px;min-height:28px}
+#terminal-monitor-workspace-close{position:absolute;right:12px;top:8px;z-index:5;padding:6px 12px;font-size:13px;color:#edf5ff;border-color:#6e879f;background:#263b50}
+.terminal-center>.terminal-monitor-workspace.is-expanded{position:fixed;inset:auto;top:12vh;left:50%;transform:translateX(-50%);width:min(1200px,92vw);height:auto;min-height:160px;max-height:72vh;box-sizing:border-box;padding:16px}
+.terminal-monitor-workspace.is-expanded #terminal-monitor-workspace-close{top:12px}
+@media(max-width:600px){.terminal-center>.terminal-monitor-workspace.is-expanded{top:8vh;width:96vw;max-height:80vh;padding:10px}}
+
+.terminal-monitor-symbol-group{margin:12px 0 18px;border:1px solid #344c62;border-radius:7px;overflow:hidden}
+.terminal-monitor-symbol-group>h5{margin:0;padding:10px 12px;background:#203449;color:#d7f5ee;font-size:13px;letter-spacing:.3px}
+.terminal-monitor-symbol-group>.terminal-monitor-card{border-top:0}
+
+/* Monitoring is popup-only; it never consumes chart height. */
+.terminal-center>.terminal-monitor-workspace{position:fixed;top:12vh;left:50%;transform:translateX(-50%);width:min(1200px,92vw);max-height:72vh;height:auto;z-index:40;box-sizing:border-box;overflow:auto}

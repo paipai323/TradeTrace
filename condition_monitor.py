@@ -8,7 +8,14 @@ import threading
 import time
 from condition_engine import Sequence, Structure, STRUCTURE, FRAMES, finite
 from terminal import ConditionInvalidated
+from condition_estimate import estimate_run
+from monitor_store import MonitorStore
 from entry_quality import EntryQualitySkipped, validate_quality, resolve_quality, check_quality
+
+
+class MonitorInterruption(ValueError):
+    def __init__(self,message,kind='connection',quote_time=None):
+        super().__init__(message);self.kind=kind;self.quote_time=quote_time
 
 
 def closed(data):
@@ -93,11 +100,11 @@ class ConditionRun:
         self.generation+=1
         self.run=dict(id=secrets.token_hex(16),generation=self.generation,request_id=request_id,scope=json.dumps([account.server,str(account.login)],separators=(',',':')),
                       account=str(account.login),server=account.server,symbol=symbol,action=action,settings=copy.deepcopy(settings),rows=copy.deepcopy(sequence.rows),
-                      sequence=sequence,phase='running',attempted=False,started=int(self.clock()*1000),last_poll=self.clock(),
+                      sequence=sequence,phase='running',attempted=False,started=int(self.clock()*1000),last_poll=self.clock(),last_quote_time=initial['quote_time'],last_observed_at=self.clock(),interruption=None,
                       message=f'Server monitoring · {symbol} · step {1 if sequence.rows else 0} of {len(sequence.rows)}. Continues while the browser is hidden.',
                       events=[],event_no=0,observations=[],review=None,result=None,invalidation=invalidation,invalidation_trigger=None,sent=False,_cancel=threading.Event())
         self.run['demo']=bool(initial.get('demo'))
-        self.run['message']=f'Server monitoring · {"DEMO" if self.run["demo"] else "LIVE"} ORDER ARMED · {symbol} · frozen AUTO setup from Start.' if action=='AUTO' else self.run['message']
+        self.run['message']=f'Server monitoring · {"DEMO" if self.run["demo"] else "LIVE"} ORDER ARMED · {symbol} · AUTO settings frozen at Start; tracked swing levels may update.' if action=='AUTO' else self.run['message']
         self._event('Started',f'{len(sequence.rows)} conditions · {action} · local server monitoring. Frozen settings from Start.')
         return self.status()
 
@@ -105,10 +112,16 @@ class ConditionRun:
         if not self.run:return self.status()
         body=body or {};run=self.run
         if body.get('id') and body['id']!=run['id']:return self.status()
+        if run['phase']=='saved':
+            self._finish('Saved setup dismissed. Monitoring remains stopped.','stopped');run['_preserve_for_restart']=False;return self.status()
+        if run['phase']=='stopped' and run.get('_preserve_for_restart'):
+            run['_preserve_for_restart']=False;self._event('Stopped','Explicit Stop dismissed the stopped setup.');return self.status()
+        if run['phase']=='stopped' and run.get('interruption') and run['interruption'].get('enabled'):
+            run['interruption'].update(enabled=False,ready=False);self._event('Recovery checks ended','Explicit Stop or replacement ended connection recovery checks.');return self.status()
         if run['phase'] in ('running','review') or run['phase']=='finishing' and not run['sent']:
             run['_cancel'].set()
             if run.get('review'):self.terminal.previews.pop(run['review']['preview'],None)
-            run['review']=None;self._finish(body.get('reason') or 'Stopped by user. Already submitted orders remain in MT5.','stopped')
+            run['review']=None;self._finish(body.get('reason') or 'Stopped by user. Already submitted orders remain in MT5.','stopped');run['_preserve_for_restart']=False
         return self.status()
 
     def signal_stop(self,body):
@@ -117,16 +130,49 @@ class ConditionRun:
         if run and (not body.get('id') or body['id']==run['id']):run['_cancel'].set()
 
     def _finish(self,message,phase='finished'):
-        self.run['phase']=phase;self.run['message']=message;self._event('Finished' if phase=='finished' else 'Entry skipped' if phase=='skipped' else 'Stopped',message)
+        self.run['phase']=phase;self.run['message']=message
+        if phase=='stopped' and not self.run.get('sent'):self.run['_preserve_for_restart']=True
+        self._event('Finished' if phase=='finished' else 'Entry skipped' if phase=='skipped' else 'Stopped',message)
 
     def _market(self,tf):
-        run=self.run;data=self.terminal.market(dict(symbol=run['symbol'],timeframe=tf))
+        run=self.run
+        try:data=self.terminal.market(dict(symbol=run['symbol'],timeframe=tf))
+        except Exception as error:raise MonitorInterruption(str(error)) from error
         if (data['account'],data['server'])!=(run['account'],run['server']):raise ValueError('MT5 account changed.')
         if bool(data.get('demo'))!=run['demo']:raise ValueError('MT5 account type changed.')
         if run['action']!='ALERT' and data.get('trading_allowed') is False:raise ValueError('MT5 trading permission was disabled.')
-        if not finite(data.get('quote_time')) or not self.clock()-30<=data['quote_time']<=self.clock()+5:raise ValueError('Quote is stale.')
+        if not finite(data.get('quote_time')) or not self.clock()-30<=data['quote_time']<=self.clock()+5:raise MonitorInterruption('Quote is stale.','stale_quote',data.get('quote_time'))
         return data
 
+
+    def _interrupt(self,error):
+        run=self.run
+        if run.get('sent'):
+            self._finish('Finished: '+str(error)+' Check MT5. No automatic retry.');return
+        if run.get('review'):self.terminal.previews.pop(run['review']['preview'],None)
+        if run.get('_prepared_preview'):self.terminal.previews.pop(run.pop('_prepared_preview'),None)
+        run['review']=None;run['_cancel'].set()
+        now=self.clock();last=run.get('last_quote_time');observed=run.get('last_observed_at',run['started']/1000)
+        stale=getattr(error,'quote_time',None);gap=max(0,now-observed,now-last if finite(last) else 0,now-stale if finite(stale) else 0)
+        kind=getattr(error,'kind','connection')
+        cause='Server polling gap detected; laptop sleep or a scheduling interruption is possible.' if kind=='poll_gap' else 'Quotes stopped updating; the market may be closed or MT5 disconnected.' if kind=='stale_quote' else 'MT5 market data is unavailable; a connection interruption is possible.'
+        run['interruption']=dict(enabled=True,kind=kind,detected_at=int(now*1000),last_quote_time=last,last_observed_at=observed,gap_seconds=gap,stale_quote_time=stale if finite(stale) else None,detail=str(error),ready=False,checked_at=None,recovered_at=None,recovery_message='Waiting for fresh quotes on the same account.')
+        run['phase']='stopped';run['message']=f'Interrupted: {cause} Data/monitoring gap about {gap:.0f}s. No order sent. Review and explicitly restart; missed signals are not replayed.'
+        self._event('Monitoring interrupted',run['message'])
+
+    def recovery(self):
+        run=self.run;info=run.get('interruption')
+        if not info or not info.get('enabled') or run['phase']!='stopped':raise ValueError('This setup is not awaiting interruption recovery.')
+        now=self.clock();ready=False;quote_time=None
+        try:
+            data=self._market('M1');quote_time=data['quote_time']
+            if not all(finite(data.get(key)) and data[key]>0 for key in ('bid','ask')) or data['bid']>data['ask']:raise ValueError('Broker quote is invalid.')
+            ready=True;message='Connection restored—fresh quotes received. Review and restart explicitly. Monitoring remains stopped.'
+        except Exception as error:message='Still unavailable: '+str(error)+' Monitoring remains stopped.'
+        changed=ready!=info['ready'];info.update(ready=ready,checked_at=int(now*1000),current_quote_time=quote_time,recovery_message=message)
+        if ready and info['recovered_at'] is None:info['recovered_at']=int(now*1000)
+        if changed:self._event('Connection restored' if ready else 'Connection lost again',message)
+        return copy.deepcopy(info)
 
     def _resolve_invalidation(self,settings,ticket,symbol,initial):
         if settings is None:return dict(enabled=False)
@@ -176,9 +222,11 @@ class ConditionRun:
         run=self.run
         if not run or run['phase']!='review' or body.get('preview')!=run['review']['preview'] or not run['invalidation']['enabled']:return
         if self.clock()-run['last_poll']>30:
-            self.stop(dict(reason='Stopped: monitoring interruption before confirmation. Review and start again.'))
+            self._interrupt(MonitorInterruption('Monitoring interruption before confirmation.','poll_gap'))
             raise ValueError('Setup monitoring was interrupted. No order sent.')
-        data=self._market('M1');run['last_poll']=self.clock()
+        try:data=self._market('M1')
+        except MonitorInterruption as error:self._interrupt(error);raise
+        run['last_poll']=self.clock();run['last_quote_time']=data['quote_time'];run['last_observed_at']=self.clock()
         if self._check_invalidation(data):raise ValueError('Setup invalidated before confirmation. No order sent.')
 
     def tick(self):
@@ -189,19 +237,21 @@ class ConditionRun:
                 self.terminal.previews.pop(run['review']['preview'],None);run['review']=None;self._finish('Finished: condition review expired. Start explicitly for a new setup.')
             elif run['invalidation']['enabled']:
                 try:
-                    if self.clock()-run['last_poll']>30:self.stop(dict(reason='Stopped: server monitoring was interrupted during review.'));return
-                    data=self._market('M1');run['last_poll']=self.clock();self._check_invalidation(data)
+                    if self.clock()-run['last_poll']>30:self._interrupt(MonitorInterruption('Server monitoring interruption during review.','poll_gap'));return
+                    data=self._market('M1');run['last_poll']=self.clock();run['last_quote_time']=data['quote_time'];run['last_observed_at']=self.clock();self._check_invalidation(data)
+                except MonitorInterruption as error:self._interrupt(error)
                 except Exception as error:self.stop(dict(reason='Stopped: '+str(error)+' Review invalidated; no order sent.'))
             return
         if run['phase']!='running':return
         if run['_cancel'].is_set():self.stop();return
         if run['last_poll'] is not None and self.clock()-run['last_poll']>30:
-            self._finish('Stopped: server monitoring was interrupted for more than 30 seconds. Review and start again.','stopped');return
+            self._interrupt(MonitorInterruption('More than 30 seconds between server polls.','poll_gap'));return
         run['last_poll']=self.clock()
         try:
             sequence=run['sequence'];step=sequence.rows[sequence.index] if not sequence.done else None
             data=self._market(step['timeframe'] if step and step['mode']=='CANDLE' else 'M1')
             if run['_cancel'].is_set():self.stop();return
+            run['last_quote_time']=data['quote_time'];run['last_observed_at']=self.clock()
             if self._check_invalidation(data):return
             candles=closed(data) if step and step['mode']=='CANDLE' else []
             if sequence.done:self._complete(data);return
@@ -214,7 +264,8 @@ class ConditionRun:
                     rule=sequence.rows[event['index']];level=event.get('structure',{}).get('level',rule.get('level') if rule['rule'] not in ('ZONE_ENTER','ZONE_TOUCH','CLOSE_IN_ZONE') else f'{rule["low"]}–{rule["high"]}')
                     self._event('Step passed',f'Step {event["index"]+1}/{len(sequence.rows)}: {rule["rule"]} {level} · Bid {data["bid"]}.')
             if complete:self._complete(data)
-            else:run['message']=f'Server monitoring · {"AUTO ORDER ARMED" if run["action"]=="AUTO" else "Review preparation" if run["action"]=="REVIEW" else "Alerts only"} · {run["symbol"]} · step {sequence.index+1} of {len(sequence.rows)}'+(' · '+sequence.structure_state['status'] if sequence.structure_state else '')+'. Frozen setup from Start; continues while the browser is hidden.'
+            else:run['message']=f'Server monitoring · {"AUTO ORDER ARMED" if run["action"]=="AUTO" else "Review preparation" if run["action"]=="REVIEW" else "Alerts only"} · {run["symbol"]} · step {sequence.index+1} of {len(sequence.rows)}'+(' · '+sequence.structure_state['status'] if sequence.structure_state else '')+'. Settings frozen at Start; tracked swing levels may update. Continues while the browser is hidden.'
+        except MonitorInterruption as error:self._interrupt(error)
         except EntryQualitySkipped as error:
             run['sent']=False;run['review']=None;self._finish(str(error)+' Start explicitly for a new setup.','skipped')
         except ConditionInvalidated as error:
@@ -250,6 +301,7 @@ class ConditionRun:
                 body['volume']=round(math.floor(raw/data['volume_step'])*data['volume_step'],8)
                 if body['volume']<data['volume_min']:raise ValueError('Minimum lot exceeds the 2% risk budget.')
             result=self.terminal.preview(body)
+        run['_prepared_preview']=result['preview']
         if body['condition_entry_quality'].get('enabled'):
             quote=self._market('M1')
             if self._check_invalidation(quote):
@@ -268,6 +320,7 @@ class ConditionRun:
             self._event('Review ready',run['message']);return
         self._event('Order attempt','One automatic submission. Check MT5 for final status.')
         run['sent']=True
+        if getattr(self,'before_send',None):self.before_send(self)
         sent=self.terminal.submit({'preview':result['preview']});run['result']=sent
         self._finish(f'Finished · broker {sent["retcode"]}: {sent["comment"]}. Order {sent["order"]}, deal {sent["deal"]}. '+sent.get('journal_warning','Setup saved to journal.' if sent.get('journal_recorded') else '')+' No automatic retry.')
 
@@ -284,10 +337,12 @@ class ConditionRun:
 class ConditionMonitor:
     """Registry of independent runners; all broker work shares one API lock."""
     ACTIVE=('running','review','finishing')
-    def __init__(self,terminal,lock,clock=time.time,interval=2):
+    def __init__(self,terminal,lock,clock=time.time,interval=2,storage_path=None):
         self.terminal=terminal;self.lock=lock;self.clock=clock;self.interval=interval
-        self.runners={};self.requests={};self.latest=None;self.generation=0;self.registry_id=secrets.token_hex(16);self.snapshot_revision=0
-        self.shutdown=threading.Event();self.thread=None
+        self.runners={};self.estimates={};self.requests={};self.latest=None;self.generation=0;self.registry_id=secrets.token_hex(16);self.snapshot_revision=0
+        self.shutdown=threading.Event();self.thread=None;self._closing=False;self.storage_warning='';self._store_signature=None;self._store_load_blocked=False
+        self.store=MonitorStore(storage_path) if storage_path is not None else None
+        self._load_saved()
 
     @property
     def run(self):
@@ -302,16 +357,94 @@ class ConditionMonitor:
         while not self.shutdown.wait(self.interval):
             with self.lock:self.tick()
 
+    def begin_shutdown(self):
+        # Keep the last durable configurations; shutdown cancellation is not a
+        # user request to remove setups from next startup's review list.
+        self._closing=True;self.shutdown.set();self.signal_stop({'all':True})
+
     def close(self):
-        self.shutdown.set();self.signal_stop({'all':True})
+        self.begin_shutdown()
         if self.thread:self.thread.join()
-        with self.lock:self.stop({'all':True,'reason':'Stopped: TradeTrace server is shutting down.'})
+        with self.lock:self.stop({'all':True,'reason':'Stopped: TradeTrace server is shutting down.'},persist=False)
+
+    def _records(self,runners=None,exclude=None):
+        records=[]
+        for key,runner in (self.runners if runners is None else runners).items():
+            if key==exclude:continue
+            run=runner.run
+            if run.get('_dismissed'):continue
+            uncertain=bool(run.get('_submission_intent') or run.get('sent') and not run.get('result'))
+            eligible=run['phase'] in self.ACTIVE or run['phase']=='saved' or run['phase']=='stopped' and ((run.get('interruption') or {}).get('enabled') or run.get('_preserve_for_restart')) or uncertain
+            if not eligible:continue
+            prior=run.get('saved') or {};request=self.requests.get(run.get('request_id'))
+            records.append(dict(id=run['id'],name=run.get('name',''),account=run['account'],server=run['server'],demo=run['demo'],symbol=run['symbol'],settings=copy.deepcopy(run['settings']),rows=copy.deepcopy(run['rows']),
+                               group=run.get('group',''),group_policy=run.get('group_policy','ALL'),invalidation=copy.deepcopy(run['invalidation']),started=run['started'],
+                               previous_phase=prior.get('previous_phase',run['phase']),uncertain=uncertain or bool(prior.get('uncertain')),request_id=run.get('request_id'),fingerprint=request[0] if request else prior.get('fingerprint')))
+        active_ids={key for key,runner in (self.runners if runners is None else runners).items() if runner.run['phase'] in self.ACTIVE}
+        while len(records)>100:
+            removable=next((i for i,record in enumerate(records) if record['id'] not in active_ids),None)
+            if removable is None:raise ValueError('Too many active setups to save.')
+            records.pop(removable)
+        return records
+
+    def _persist(self,strict=False,records=None):
+        if not self.store or self._closing:return True
+        if self._store_load_blocked and not strict:return False
+        try:
+            records=self._records() if records is None else records;signature=json.dumps(records,sort_keys=True,allow_nan=False)
+            if signature!=self._store_signature:self.store.save(records,int(self.clock()*1000));self._store_signature=signature
+            self.storage_warning='';self._store_load_blocked=False;return True
+        except Exception as error:
+            self.storage_warning='Setups could not be saved: '+str(error)
+            if strict:raise ValueError(self.storage_warning) from error
+            return False
+
+    def _load_saved(self):
+        if not self.store:return
+        try:data=self.store.load()
+        except Exception as error:self._store_load_blocked=True;self.storage_warning='Saved setups could not be loaded; the original file is preserved. '+str(error);return
+        failures=0
+        for record in data['records']:
+            try:
+                if not isinstance(record,dict):raise ValueError('Invalid record.')
+                rid=record['id'];settings=copy.deepcopy(record['settings']);ticket=settings['ticket']
+                if not isinstance(rid,str) or len(rid)!=32 or any(char not in '0123456789abcdef' for char in rid) or rid in self.runners:raise ValueError('Invalid saved identifier.')
+                if settings.get('action') not in ('ALERT','REVIEW','AUTO') or settings.get('sizing') not in ('MANUAL','AUTO') or ticket.get('side') not in ('BUY','SELL') or ticket.get('order-kind') not in ('MARKET','PENDING'):raise ValueError('Invalid saved execution settings.')
+                if not all(isinstance(record.get(key),str) and record[key] for key in ('account','server','symbol')):raise ValueError('Missing saved account or symbol.')
+                if not isinstance(record.get('demo'),bool) or not isinstance(record.get('name',''),str) or len(record.get('name',''))>80 or not isinstance(record.get('group',''),str) or len(record.get('group',''))>60 or record.get('group_policy','ALL') not in ('ALL','FIRST_ENTRY'):raise ValueError('Invalid saved metadata.')
+                timeout=float(settings['timeout']);gap=float(settings['gap'])
+                if not all(math.isfinite(value) and value>=0 for value in (timeout,gap)):raise ValueError('Invalid saved timing.')
+                sequence=Sequence(record['rows'],timeout*60,gap);validate_quality(settings.get('entryQuality'),sequence.rows)
+                for key in ('autoPlan','invalidation'):
+                    if settings.get(key) is not None and not isinstance(settings[key],dict):raise ValueError('Invalid saved plan.')
+                guard=copy.deepcopy(record.get('invalidation') or {'enabled':False})
+                if not isinstance(guard,dict) or guard.get('enabled') and (not finite(guard.get('level')) or guard['level']<=0 or guard.get('direction') not in ('BELOW','ABOVE')):raise ValueError('Invalid previous cancellation level.')
+                self.generation+=1;runner=ConditionRun(self.terminal,self.lock,self.clock,self.interval)
+                saved=dict(saved_at=data.get('saved_at'),previous_phase=record.get('previous_phase','running'),uncertain=bool(record.get('uncertain')),fingerprint=record.get('fingerprint'))
+                runner.run=dict(id=rid,generation=self.generation,request_id=record.get('request_id'),scope=json.dumps([record['server'],record['account']],separators=(',',':')),account=record['account'],server=record['server'],demo=record['demo'],symbol=record['symbol'],
+                                name=record.get('name','') or record['symbol']+' saved setup',group=record.get('group',''),group_policy=record.get('group_policy','ALL'),settings=settings,rows=sequence.rows,sequence=sequence,action=settings['action'],phase='saved',attempted=False,sent=False,
+                                started=record.get('started') if finite(record.get('started')) else int(self.clock()*1000),last_poll=None,last_quote_time=None,last_observed_at=None,interruption=None,invalidation=guard,invalidation_trigger=None,
+                                events=[],event_no=0,observations=[],review=None,result=None,saved=saved,_cancel=threading.Event(),message='Saved—review to restart. Automatic entry is disarmed; every step starts from the beginning.'+(' Previous submission outcome may be uncertain. Check MT5 positions/history before re-arming.' if saved['uncertain'] else ''))
+                runner.before_send=self._before_auto_send;runner._event('Restored disarmed',runner.run['message']);self.runners[rid]=runner;self.latest=rid
+                request_id=record.get('request_id');fingerprint=record.get('fingerprint')
+                if isinstance(request_id,str) and 8<=len(request_id)<=100 and isinstance(fingerprint,str) and len(fingerprint)==64:self.requests[request_id]=(fingerprint,rid)
+            except Exception:failures+=1
+        if failures:self._store_load_blocked=True;self.store.read_error=True;self.storage_warning=f'{failures} saved setup(s) could not be loaded; valid setups were restored disarmed.'
+
+    def _before_auto_send(self,runner):
+        if self.shutdown.is_set() or runner.run['_cancel'].is_set():raise ValueError('Server is stopping. No order was sent.')
+        runner.run['_submission_intent']=True
+        try:self._persist(strict=True)
+        except Exception:
+            runner.run.pop('_submission_intent',None);runner.run['sent']=False
+            if runner.run.get('_prepared_preview'):self.terminal.previews.pop(runner.run['_prepared_preview'],None)
+            raise
 
     def status(self,body=None):
         body=body or {};selected=body.get('id',self.latest)
         runs=[runner.status()['run'] for runner in self.runners.values()]
         self.snapshot_revision+=1
-        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision)
+        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning)
 
     def start(self,body):
         if self.shutdown.is_set():raise ValueError('The server is shutting down. No new setup was started.')
@@ -336,8 +469,12 @@ class ConditionMonitor:
                 raise ValueError('Linked setups on the same symbol must use the same group policy.')
         # Validate/freeze the complete new setup before stopping a replaced runner.
         runner=ConditionRun(self.terminal,self.lock,self.clock,self.interval);runner.start(body)
-        if replace:self.runners[replace].stop({'reason':'Stopped: replaced by an explicitly restarted setup.'})
-        self.generation+=1;run=runner.run;run.update(generation=self.generation,name=name.strip() or f'{run["symbol"]} {run["settings"]["ticket"]["side"]} #{self.generation}',group=group,group_policy=policy)
+        next_generation=self.generation+1;run=runner.run;run.update(generation=next_generation,name=name.strip() or f'{run["symbol"]} {run["settings"]["ticket"]["side"]} #{next_generation}',group=group,group_policy=policy)
+        prospective={**self.runners,run['id']:runner};records=self._records(prospective,exclude=replace)
+        records[-1]['fingerprint']=fingerprint
+        self._persist(strict=True,records=records)
+        if replace:self.runners[replace].run['_dismissed']=True;self.runners[replace].stop({'reason':'Stopped: replaced by an explicitly restarted setup.'})
+        self.generation=next_generation;runner.before_send=self._before_auto_send
         self.runners[run['id']]=runner;self.latest=run['id'];self.requests[request_id]=(fingerprint,run['id'])
         # Bound completed history, without ever dropping an active setup.
         for key in list(self.runners):
@@ -345,14 +482,28 @@ class ConditionMonitor:
             if key!=self.latest and self.runners[key].run['phase'] not in self.ACTIVE:del self.runners[key]
         return self.status()
 
+    def estimate(self,body):
+        run_id=body.get('id');runner=self.runners.get(run_id) if isinstance(run_id,str) else None
+        if not runner:raise ValueError('Choose an existing monitor to estimate.')
+        previous=self.estimates.get(run_id)
+        if previous and previous['phase']==runner.run['phase'] and 0<=self.clock()-previous['time']<3:return dict(estimate=copy.deepcopy(previous['value']))
+        try:value=estimate_run(runner)
+        except Exception as error:value=dict(id=run_id,status='unavailable',at=int(self.clock()*1000),reason=str(error),note='Estimate unavailable; monitoring is unchanged.')
+        self.estimates[run_id]=dict(time=self.clock(),phase=runner.run['phase'],value=value)
+        for key in list(self.estimates):
+            if key not in self.runners:del self.estimates[key]
+        return dict(estimate=copy.deepcopy(value))
+
     def _targets(self,body):
         if body.get('all') or not body.get('id'):return list(self.runners.values())
         runner=self.runners.get(body.get('id') or self.latest)
         return [runner] if runner else []
 
-    def stop(self,body=None):
+    def stop(self,body=None,*,persist=True):
         body=body or {}
-        for runner in self._targets(body):runner.stop({key:value for key,value in body.items() if key!='id'})
+        for runner in self._targets(body):
+            runner.run['_dismissed']=True;runner.stop({key:value for key,value in body.items() if key!='id'})
+        if persist:self._persist()
         return self.status({'id':body.get('id') or self.latest})
 
     def signal_stop(self,body):
@@ -375,19 +526,38 @@ class ConditionMonitor:
             try:runner.tick()
             except Exception as error:runner._finish('Stopped: monitoring failed. '+str(error)+' Check MT5.','stopped')
             result=runner.run.get('result')
+            if result is not None:runner.run.pop('_submission_intent',None)
+            elif runner.run['phase'] in ('skipped','invalidated') and not runner.run.get('sent'):runner.run.pop('_submission_intent',None)
             if result and result.get('retcode') in (10008,10009,10010):self._stop_linked(runner)
             elif runner.run.get('sent') and not result:self._stop_linked(runner,uncertain=True)
+        due=[runner for runner in self.runners.values() if runner.run['phase']=='stopped' and runner.run.get('interruption',{} ) and runner.run['interruption'].get('enabled') and self.clock()-runner.run.get('_recovery_probe_time',-float('inf'))>=10]
+        if due:
+            runner=min(due,key=lambda item:item.run.get('_recovery_probe_time',-float('inf')));runner.run['_recovery_probe_time']=self.clock();runner.recovery()
+        self._persist()
+
+    def recovery(self,body):
+        runner=self.runners.get(body.get('id'))
+        if not runner:raise ValueError('Choose an existing monitor.')
+        runner.recovery();return self.status({'id':runner.run['id']})
 
     def _review_runner(self,body):
         return next((runner for runner in self.runners.values() if runner.run['phase']=='review' and runner.run.get('review',{}).get('preview')==body.get('preview')),None)
 
     def before_submission(self,body):
         runner=self._review_runner(body)
-        if runner:runner.before_submission(body)
+        if runner:
+            runner.before_submission(body)
+            runner.run['_submission_intent']=True
+            try:self._persist(strict=True)
+            except Exception:
+                runner.run.pop('_submission_intent',None);self.terminal.previews.pop(body.get('preview'),None)
+                raise
 
     def record_submission(self,body,result=None,error=None):
         runner=self._review_runner(body)
         if not runner:return
         runner.record_submission(body,result,error)
+        if result is not None or isinstance(error,(ConditionInvalidated,EntryQualitySkipped)):runner.run.pop('_submission_intent',None)
         if result and result.get('retcode') in (10008,10009,10010):self._stop_linked(runner)
         elif error and not isinstance(error,(ConditionInvalidated,EntryQualitySkipped)):self._stop_linked(runner,uncertain=True)
+        self._persist()

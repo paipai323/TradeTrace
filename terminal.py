@@ -100,8 +100,8 @@ class Terminal:
                                  price=o.price_open,sl=o.sl,tp=o.tp) for o in orders],
                     positions=[{k: str(getattr(p,k)) if k == 'ticket' else getattr(p,k) for k in fields} for p in positions])
 
-    def condition_plan(self, body):
-        """Calculate a condition order, validate it and issue a review token. Never send."""
+    def calculate_condition_plan(self, body):
+        """Calculate condition prices and sizing without order checks or review tokens."""
         mt,account=self.connection(trading=True)
         if (str(account.login),account.server)!=(str(body.get('expected_account')),body.get('expected_server')):
             raise ValueError('Condition account changed. Start again.')
@@ -174,6 +174,10 @@ class Terminal:
                  'order_kind':'MARKET' if entry_mode=='MARKET' else 'LIMIT','price':entry,'sl':stop,'tp':target,'volume':volume}
         if expires_at:planned['condition_expires_at']=expires_at
         planned=json.loads(json.dumps(planned,allow_nan=False))
+        return planned,calculation
+
+    def condition_plan(self, body):
+        planned,calculation=self.calculate_condition_plan(body)
         result=self.preview(planned);result['calculation']=calculation
         return result
 
@@ -238,7 +242,7 @@ class Terminal:
         return dict(account=str(account.login),server=account.server,currency=account.currency,positions=recent[:100],
                     note='Last 30 days · up to 100 closed positions · net includes commission, swap and fees. Scale-ins, partial closes and reversals are omitted.')
 
-    def request(self, body, position=None, pending_order=None):
+    def request(self, body, position=None, pending_order=None, *, broker_check=True):
         if body.get('operation') == 'position-sltp':
             return self.position_request(body)
         if body.get('operation') == 'close':
@@ -326,9 +330,10 @@ class Terminal:
                     risk=direction*(adverse-sl);reward=direction*(tp-adverse)
                     if not math.isfinite(multiple) or multiple<=0 or risk<=0 or reward/risk+1e-7<multiple:
                         raise ValueError('Price moved beyond the reviewed reward/risk plan. Start again to calculate a new plan.')
-        checked = mt.order_check(request)
-        if checked is None or checked.retcode != 0:
-            raise ValueError('Broker order check failed: ' + (checked.comment if checked else str(mt.last_error())))
+        if broker_check:
+            checked = mt.order_check(request)
+            if checked is None or checked.retcode != 0:
+                raise ValueError('Broker order check failed: ' + (checked.comment if checked else str(mt.last_error())))
         return request, account
 
     def position_request(self, body):

@@ -1,0 +1,17 @@
+const assert=require('node:assert/strict'),C=require('../static/terminal-conditions.js');
+const row={rule:'MS_UP',mode:'CANDLE',timeframe:'M15'},state={bias:-1,level:3950.123,broken:false};
+assert.match(C.waitingDescription(row,state,{digits:3}),/M15 candle close above 3950.123.*Wicks do not count/);
+assert.match(C.waitingDescription({...row,rule:'MS_DOWN'},{...state,bias:1}),/close below/);
+assert.match(C.waitingDescription({...row,rule:'BOS_UP'},{...state,bias:1}),/Bullish BOS/);
+assert.match(C.waitingDescription(row,{...state,bias:1,status:'Bullish context; needs bearish context'}),/needs bearish context/);
+assert.match(C.waitingDescription(row,{...state,broken:true,status:'Waiting for a new confirmed swing'}),/new confirmed swing/);
+assert.match(C.waitingDescription(row,state,{now:1000,formingTime:900,quoteTime:999}),/13:20 \(estimate\)/);
+assert.doesNotMatch(C.waitingDescription(row,state,{now:1000,formingTime:900,quoteTime:950}),/scheduled close/);
+assert.doesNotMatch(C.waitingDescription(row,state,{now:2000,formingTime:900,quoteTime:2000}),/scheduled close/);
+assert.doesNotMatch(C.waitingDescription(row,state,{now:1000,formingTime:1100,quoteTime:1000}),/scheduled close/);
+assert.match(C.waitingDescription({rule:'TRADED_ABOVE',mode:'LIVE',level:3950}),/Bid to trade above 3950/);
+assert.match(C.waitingDescription({rule:'ZONE_ENTER',mode:'LIVE',low:3940,high:3970}),/from outside/);
+assert.match(C.waitingDescription({rule:'CLOSE_IN_ZONE',mode:'CANDLE',timeframe:'M5',low:3940,high:3970}),/M5 candle close inside/);
+assert.match(C.waitingDescription({rule:'SWEEP_ABOVE_REJECT',mode:'LIVE',level:3950}),/sweep above.*return below/);
+assert.match(C.waitingDescription(null),/All steps have passed/);
+console.log('Condition waiting descriptions and broker-timed countdown checks passed');

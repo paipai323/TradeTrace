@@ -20,12 +20,12 @@ bridge = Bridge()
 terminal = Terminal(bridge)
 token = secrets.token_urlsafe(32)
 api_lock = threading.RLock()
-condition_monitor = ConditionMonitor(terminal, api_lock)
+condition_monitor = ConditionMonitor(terminal, api_lock, storage_path=Path(__file__).parent / '.local' / 'condition-setups.json')
 VERSION = '1.18.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['entry_quality.py', 'condition_engine.py', 'condition_monitor.py', 'timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/terminal-conditions.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['monitor_store.py', 'condition_estimate.py', 'entry_quality.py', 'condition_engine.py', 'condition_monitor.py', 'timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/terminal-conditions.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -119,6 +119,10 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if self.path == '/api/terminal/conditions/start':
                 result = condition_monitor.start(body)
+            elif self.path == '/api/terminal/conditions/recovery':
+                result = condition_monitor.recovery(body)
+            elif self.path == '/api/terminal/conditions/estimate':
+                result = condition_monitor.estimate(body)
             elif self.path == '/api/terminal/conditions/status':
                 result = condition_monitor.status(body)
             elif self.path == '/api/terminal/conditions/stop':
@@ -252,7 +256,7 @@ if __name__ == '__main__':
             for command in sys.stdin:
                 if command.strip().lower() == 'stop':
                     break
-            condition_monitor.shutdown.set();condition_monitor.signal_stop({})
+            condition_monitor.begin_shutdown()
             server.shutdown()
         threading.Thread(target=watch_launcher, daemon=True).start()
     try:
@@ -260,7 +264,7 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         pass
     finally:
-        condition_monitor.shutdown.set();condition_monitor.signal_stop({})
+        condition_monitor.begin_shutdown()
         server.server_close()
         condition_monitor.close()
         if bridge.mt:

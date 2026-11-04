@@ -2,6 +2,7 @@
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 import threading
@@ -15,17 +16,25 @@ from entry_quality import check_quality
 
 class FakeTerminal:
     def __init__(self):
-        self.bid=1.103;self.account='123';self.sent=[];self.previews={};self.failure=None;self.preview_delay=0;self.preview_started=threading.Event()
+        self.fixture_bars=None;self.quote_age=0;self.bid=1.103;self.account='123';self.sent=[];self.previews={};self.failure=None;self.preview_delay=0;self.preview_started=threading.Event()
     def connection(self,trading=False):return None,Row(login=self.account,server='Test-Demo')
     def symbols(self):return dict(symbols=['EURUSD','GBPUSD'],visible=['EURUSD'],account=self.account,server='Test-Demo',currency='USD',demo=True)
     def market(self,body):
         if self.failure:raise ValueError(self.failure)
-        bars=[[int(time.time()//300)*300000-(299-i)*300000,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100] for i in range(300)]
-        return dict(bars=bars,bid=self.bid,ask=self.bid+.0001,quote_time=time.time(),digits=5,tick_size=.00001,point=.00001,stops_distance=.0001,
+        bars=self.fixture_bars if self.fixture_bars is not None else [[int(time.time()//300)*300000-(299-i)*300000,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100] for i in range(300)]
+        return dict(bars=bars,bid=self.bid,ask=self.bid+.0001,quote_time=time.time()-self.quote_age,digits=5,tick_size=.00001,point=.00001,stops_distance=.0001,
                     volume_min=.01,volume_max=10,volume_step=.01,balance=10000,equity=10000,margin_free=10000,currency='USD',account=self.account,server='Test-Demo',demo=True,trading_allowed=True,positions=[],orders=[])
     def quotes(self,body):return dict(quotes={s:dict(bid=self.bid,ask=self.bid+.0001,time=time.time()) for s in body['symbols']})
     def closed(self,body):return dict(positions=[])
     def estimate(self,body):return dict(account=self.account,server='Test-Demo',currency='USD',sl=-10,tp=20)
+    def plan(self,body):
+        direction=1 if body['side']=='BUY' else -1;entry=float(body['entry']);volume=float(body['volume'])
+        return dict(account=self.account,server='Test-Demo',currency='USD',risk=abs((float(body['stop'])-entry)*100000*volume),reward=direction*(float(body['target'])-entry)*100000*volume)
+    def request(self,body,*,broker_check=True):
+        market=body['order_kind']=='MARKET';entry=(self.bid+.0001 if body['side']=='BUY' else self.bid) if market else float(body['price']);sl=float(body['sl']);tp=float(body['tp']);direction=1 if body['side']=='BUY' else -1
+        check_quality(body.get('condition_entry_quality'),entry,sl,tp,body['side'],.00001,market)
+        if direction*(entry-sl)<=0 or direction*(tp-entry)<=0:raise ValueError('Invalid protection at current quote.')
+        return dict(price=entry,sl=sl,tp=tp,volume=float(body['volume'])),Row(login=self.account,server='Test-Demo')
     def preview(self,body):
         self.preview_started.set();time.sleep(self.preview_delay)
         key='test-preview-'+str(len(self.previews)+len(self.sent));self.previews[key]=copy.deepcopy(body)
@@ -40,7 +49,7 @@ class FakeTerminal:
         return dict(retcode=10009,comment='Fake broker execution',order=str(len(self.sent)),deal=str(len(self.sent)),volume=float(saved['volume']),price=self.bid+.0001,operation='open',journal_recorded=True,message='Fake broker only')
 
 
-terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1)
+terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1,storage_path=os.environ.get('TRADETRACE_TEST_MONITOR_STORE'))
 
 
 class Handler(server.Handler):
@@ -57,18 +66,26 @@ class Handler(server.Handler):
             self.rfile.read(int(self.headers['Content-Length']));return self.send(basic[self.path])
         if self.path=='/api/test/feed':
             body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if 'bars' in body:terminal.fixture_bars=body['bars']
+            if 'quote_age' in body:terminal.quote_age=body['quote_age']
+            if 'poll_gap' in body and server.condition_monitor.run:
+                run=server.condition_monitor.run;run['last_poll']=run['last_observed_at']=run['last_quote_time']=time.time()-body['poll_gap']
             if 'bid' in body:terminal.bid=body['bid']
             if 'account' in body:terminal.account=body['account']
             if 'failure' in body:terminal.failure=body['failure']
             if 'preview_delay' in body:terminal.preview_delay=body['preview_delay'];terminal.preview_started.clear()
             if body.get('expire') and server.condition_monitor.run:server.condition_monitor.run['review_deadline']=time.time()-1
-            return self.send(dict(sent=len(terminal.sent),state=server.condition_monitor.status()))
+            return self.send(dict(sent=len(terminal.sent),previews=len(terminal.previews),state=server.condition_monitor.status()))
         return super().handle_api()
 
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,required=True);args=parser.parse_args()
     app=server.AppServer(('127.0.0.1',args.port),Handler);server.condition_monitor.launch()
+    if os.environ.get('TRADETRACE_TEST_MONITOR_STORE'):
+        def stop_from_stdin():
+            if sys.stdin.readline().strip()=='stop':app.shutdown()
+        threading.Thread(target=stop_from_stdin,daemon=True).start()
     print(f'http://127.0.0.1:{args.port}',flush=True)
     try:app.serve_forever()
     finally:app.server_close();server.condition_monitor.close()

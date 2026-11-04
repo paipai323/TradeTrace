@@ -12,7 +12,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  const waitState=async(predicate)=>{const until=Date.now()+12000;while(Date.now()<until){const value=await post('test/feed');if(predicate(value))return value;await new Promise(r=>setTimeout(r,100));}throw Error('Monitor state timeout: '+JSON.stringify(await post('test/feed')));};
  let delayNextStart=true;await page.route('**/api/terminal/conditions/start',async route=>{if(delayNextStart){delayNextStart=false;await new Promise(resolve=>setTimeout(resolve,3000));}await route.continue();});
  const setup=async(level,action,name,group='',policy='ALL')=>{
-  await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-monitor-add').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);await page.locator('#terminal-setup-tab-order').click();await page.locator('#terminal-sl').fill('1.09');await page.locator('#terminal-tp').fill('1.12');
+  await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-monitor-workspace-open').click();await page.locator('#terminal-monitor-add').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);await page.locator('#terminal-setup-tab-order').click();await page.locator('#terminal-sl').fill('1.09');await page.locator('#terminal-tp').fill('1.12');
   await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-condition-add').click();await page.locator('.terminal-condition-row [data-field=level]').fill(String(level));
   await page.locator('#terminal-monitor-name').fill(name);await page.locator('#terminal-monitor-group-settings').evaluate(e=>e.open=true);await page.locator('#terminal-monitor-group').fill(group);await page.locator('#terminal-monitor-policy').selectOption(policy);
   await page.locator('#terminal-condition-action').selectOption(action);await page.locator('#terminal-condition-start').click();
@@ -23,7 +23,25 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  const a=await setup(1.104,'AUTO','Buy breakout'),b=await setup(1.104,'AUTO','Buy confirmation');
  let state=(await post('test/feed')).state;assert.equal(state.runs.filter(r=>r.phase==='running').length,2);assert.equal(new Set(state.runs.map(r=>r.symbol)).size,1);
  await page.waitForFunction(()=>document.querySelector('#terminal-monitor-count').textContent==='2 active');
- await page.locator('#terminal-monitor-list').screenshot({path:path.join(root,'work/multiple-monitors.png')});
+ await page.locator('#terminal-monitor-workspace-open').click();
+ assert.equal(await page.locator('#terminal-monitor-workspace').evaluate(e=>e.classList.contains('is-expanded')),true);
+ await page.locator('#terminal-monitor-workspace').screenshot({path:path.join(root,'work/monitor-workspace-desktop.png')});
+ await page.locator(`[data-monitor-id="${a}"]`).getByRole('button',{name:'View on chart',exact:true}).click();
+ assert.equal(await page.locator('#terminal-setup-builder').evaluate(e=>e.open),false,'view chart does not open builder');
+ assert.equal(await page.locator('#terminal-monitor-workspace').isHidden(),true);
+ assert.equal(await page.locator('#terminal-monitor-name').inputValue(),'Buy breakout');
+ await page.locator('#terminal-monitor-workspace-open').click();
+ await page.locator('#terminal-monitor-workspace-close').click();
+ assert.equal(await page.locator('#terminal-monitor-workspace').isHidden(),true,'corner Close hides workspace');
+ await page.locator('#terminal-monitor-workspace-open').click();
+ await page.keyboard.press('Escape');
+ assert.equal(await page.locator('#terminal-monitor-workspace').isHidden(),true,'Escape hides workspace');
+ await page.locator('#terminal-monitor-workspace-open').click();
+ await page.setViewportSize({width:540,height:850});
+ await page.locator('#terminal-monitor-workspace').screenshot({path:path.join(root,'work/monitor-workspace-mobile.png')});
+ assert.equal(await page.locator('#terminal-monitor-workspace').evaluate(e=>e.scrollWidth<=e.clientWidth+1),true,'narrow workspace has no horizontal overflow');
+ await page.setViewportSize({width:1536,height:1100});
+
  await post('test/feed',{bid:1.105});await waitState(s=>s.sent===2&&s.state.runs.filter(r=>r.phase==='finished').length===2);
  await post('test/feed',{bid:1.103});
  const c=await setup(1.104,'AUTO','Scenario A','Alternatives','FIRST_ENTRY'),d=await setup(1.104,'AUTO','Scenario B','Alternatives','FIRST_ENTRY');
@@ -35,24 +53,36 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  const reviewOne=state.runs.find(r=>r.id===e).review.preview,reviewTwo=state.runs.find(r=>r.id===f).review.preview;assert.notEqual(reviewOne,reviewTwo);
  await page.reload();await page.locator('#nav-terminal').click();await page.locator('#terminal-setup-tab-conditions').click();
  await page.waitForFunction(()=>document.querySelectorAll('.terminal-monitor-card').length===6);
+ const history=page.locator('.terminal-monitor-history');assert.equal(await history.evaluate(e=>e.open),false,'stopped and completed setups are collapsed');
+ assert.equal(await page.locator('#terminal-monitor-list>.terminal-monitor-symbol-group>.terminal-monitor-card').count(),2,'both current reviews stay outside history');
+ assert.equal(await page.locator('#terminal-monitor-list').evaluate(e=>getComputedStyle(e).maxHeight),'none','no tiny nested scrolling list');
+ await page.locator('#terminal-monitor-workspace-open').click();
  await page.locator(`[data-monitor-id="${e}"] button`).first().click();
  await page.waitForFunction(()=>!document.querySelector('#terminal-submit').hidden);assert.match(await page.locator('#terminal-order-summary').textContent(),/CONDITIONS COMPLETE/);
  await post('terminal/conditions/stop',{id:e});state=(await post('test/feed')).state;
  assert.equal(state.runs.find(r=>r.id===f).phase,'review','stopping one keeps the other review alive');
  const expired=await context.request.post(url+'/api/terminal/submit',{headers:{'X-Replay-Token':token},data:{preview:reviewOne}});assert.notEqual(expired.status(),200);
- await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.runs.every(r=>!['running','review','finishing'].includes(r.phase)));
+ await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-monitor-workspace-open').click();await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.runs.every(r=>!['running','review','finishing'].includes(r.phase)));
  assert.equal((await post('test/feed')).sent,3);
  await post('test/feed',{bid:1.103});await page.locator('#terminal-symbol').selectOption('GBPUSD');await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('GBPUSD'));
  const g=await setup(1.2,'ALERT','GBP monitor');
  await page.locator('#terminal-symbol').selectOption('EURUSD');await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('EURUSD'));
  const h=await setup(1.2,'ALERT','EUR monitor');
+ await page.waitForFunction(()=>document.querySelectorAll('#terminal-monitor-list>.terminal-monitor-symbol-group').length===2);
+ for(const [symbol,id] of [['EURUSD',h],['GBPUSD',g]]){
+  const group=page.locator(`#terminal-monitor-list>.terminal-monitor-symbol-group[data-monitor-symbol="${symbol}"]`);
+  assert.match(await group.locator('h5').textContent(),new RegExp(symbol+' · 1 setup'));
+  assert.equal(await group.locator(`[data-monitor-id="${id}"]`).count(),1,'setup stays in its own symbol group');
+ }
+
+ await page.locator('#terminal-monitor-workspace-open').click();
  await page.locator(`[data-monitor-id="${g}"] button`).first().click();await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('GBPUSD'));
  assert.equal(await page.locator('#terminal-monitor-name').inputValue(),'GBP monitor');
  await page.locator('#terminal-condition-action').selectOption('REVIEW');assert.equal((await post('test/feed')).state.runs.find(r=>r.id===g).phase,'running','draft action edits do not stop a frozen run');
  await page.locator('#terminal-condition-action').selectOption('ALERT');await page.locator('.terminal-condition-row [data-field=level]').fill('1.3');await page.locator('#terminal-condition-start').click();
  state=(await waitState(s=>s.state.runs.find(r=>r.id===g).phase==='stopped')).state;
  assert.equal(state.runs.find(r=>r.id===h).phase,'running','restart affects only the selected symbol/setup');
- await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.runs.every(r=>!['running','review','finishing'].includes(r.phase)));
+ await page.locator('#terminal-monitor-workspace-open').click();await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.runs.every(r=>!['running','review','finishing'].includes(r.phase)));
  assert.deepEqual(errors,[]);
  console.log('Multiple monitor browser tests passed: same-symbol independent entries, linked cancellation, separate reviews, reload, individual Stop and Stop all; fake broker only');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{await browser?.close();server.kill();});

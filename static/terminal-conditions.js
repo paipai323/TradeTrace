@@ -135,6 +135,27 @@
       return this.done;
     }
   }
-  const api={rules,frames,zone,structure,Structure,candleOnly,fieldErrors,validate,matches,Sequence};
+  function waitingDescription(row,state,options={}){
+    if(!row)return 'All steps have passed; preparing the selected action.';
+    const digits=Number.isInteger(options.digits)?options.digits:5,price=value=>Number(value).toFixed(digits),rule=row.rule,frame=row.timeframe;
+    let message='';
+    if(structure(rule)){
+      const upward=rule.endsWith('_UP'),required=rule.startsWith('MS')?(upward?-1:1):(upward?1:-1);
+      if(!state||state.bias!==required||!state.level||state.broken)return 'Waiting: '+(state?.status||'initializing confirmed structure from broker candles')+'.';
+      message=`Waiting for ${frame} candle close ${upward?'above':'below'} ${price(state.level)} (${rules[rule]}). Wicks do not count.`;
+    }else{
+      const subject=row.mode==='CANDLE'?`${frame} candle`:'Bid',level=price(row.level),bounds=`${price(row.low)}–${price(row.high)}`;
+      const actions={TRADED_ABOVE:`${subject} to trade above ${level}`,TRADED_BELOW:`${subject} to trade below ${level}`,ZONE_ENTER:`${subject} to enter ${bounds} from outside`,ZONE_TOUCH:`${subject} to touch ${bounds}`,SWEEP_ABOVE_REJECT:`${subject} to sweep above ${level} and return below`,SWEEP_BELOW_RECLAIM:`${subject} to sweep below ${level} and return above`,CLOSE_ABOVE:`${frame} candle close above ${level}`,CLOSE_BELOW:`${frame} candle close below ${level}`,CROSS_ABOVE:`${frame} candle close crossing above ${level}`,CROSS_BELOW:`${frame} candle close crossing below ${level}`,CLOSE_IN_ZONE:`${frame} candle close inside ${bounds}`};
+      message='Waiting for '+(actions[rule]||rules[rule]||'the active condition')+'.';
+    }
+    if(row.mode==='CANDLE'&&Number.isFinite(options.now)){
+      const seconds={M1:60,M5:300,M15:900,M30:1800,H1:3600,H4:14400,D1:86400}[frame],end=options.formingTime+seconds,left=Math.ceil(end-options.now);
+      if(seconds&&Number.isFinite(options.formingTime)&&options.now>=options.formingTime&&left>0&&Number.isFinite(options.quoteTime)&&options.now-options.quoteTime<=30&&options.quoteTime<=options.now+5){
+        const minutes=Math.floor(left/60),remaining=String(left%60).padStart(2,'0');message+=` Next scheduled close in ${minutes}:${remaining} (estimate).`;
+      }
+    }
+    return message;
+  }
+  const api={waitingDescription,rules,frames,zone,structure,Structure,candleOnly,fieldErrors,validate,matches,Sequence};
   if(typeof module==='object')module.exports=api;else root.TerminalConditions=api;
 })(typeof window==='object'?window:globalThis);
