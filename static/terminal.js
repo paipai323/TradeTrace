@@ -1495,19 +1495,31 @@
     }catch(error){conditionMessage('Review unavailable: '+error.message);}
   }
   function syncConditionStartLabel(){el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';}
+  let monitorFilter='all',monitorOpener=null;
+  const monitorDetailsOpen=new Set();
+  el('monitor-toolbar').onclick=()=>showMonitorWorkspace();
+  for(const button of el('monitor-filters').querySelectorAll('button'))button.onclick=()=>{monitorFilter=button.dataset.monitorFilter;for(const item of el('monitor-filters').querySelectorAll('button'))item.setAttribute('aria-pressed',String(item===button));renderMonitorList();};
+  function monitorDisplayName(run){
+    const side=run.settings.ticket.side,legacy=`${run.symbol} ${side} #`,name=run.name||'';
+    if(name&&!((name.startsWith(legacy)&&/^\d+$/.test(name.slice(legacy.length)))||name===run.symbol+' saved setup'))return name;
+    const row=run.rows[0],rule=row?(C.rules[row.rule]||row.rule).replace('Bullish ','').replace('Bearish ','').replace('MS','market shift').replace('BOS','structure break'):'conditions';
+    return `${run.symbol} · ${side==='BUY'?'Buy':'Sell'} after ${row?.mode==='CANDLE'?row.timeframe+' ':''}${rule}${run.rows.length>1?' + '+(run.rows.length-1)+' more':''}`;
+  }
   function showMonitorWorkspace(){
+    if(el('monitor-workspace').hidden)monitorOpener=document.activeElement;
     const panel=el('monitor-workspace');panel.hidden=false;panel.classList.add('is-expanded');el('monitors-panel').open=true;
     el('monitor-workspace-close').focus({preventScroll:true});
   }
   el('monitor-workspace-open').onclick=()=>showMonitorWorkspace();
-  function hideMonitorWorkspace(){el('monitor-workspace').hidden=true;el('monitor-workspace').classList.remove('is-expanded');el('monitor-workspace-open').focus({preventScroll:true});}
+  function hideMonitorWorkspace(){el('monitor-workspace').hidden=true;el('monitor-workspace').classList.remove('is-expanded');if(monitorOpener?.isConnected)monitorOpener.focus({preventScroll:true});}
   el('monitor-workspace-close').onclick=hideMonitorWorkspace;
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!el('setup-builder').open&&!el('monitor-workspace').hidden)hideMonitorWorkspace();});
   function renderMonitorList(){
     const active=serverMonitors.filter(r=>['running','review','finishing'].includes(r.phase)),saved=serverMonitors.filter(r=>r.phase==='saved');el('monitor-count').textContent=`${active.length} active${saved.length?' · '+saved.length+' saved':''}`;
+    el('monitor-toolbar').textContent=`Monitoring · ${active.length}`;
     el('monitor-overview').textContent=el('monitor-count').textContent+' · all symbols';
     el('monitor-stop-all').disabled=!active.length&&!saved.length;el('monitor-add').disabled=conditionBusy||submitting||reviewing||closing;
-    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview,r.interruption?.checked_at,r.interruption?.enabled]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing]));
+    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview,r.interruption?.checked_at,r.interruption?.enabled]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing,monitorFilter]));
     if(el('monitor-list').dataset.key===key)return;el('monitor-list').dataset.key=key;
     const previousHistory=el('monitor-list').querySelector('.terminal-monitor-history'),historyOpen=previousHistory?.open===true;
     const liveCards=[],attentionCards=[],historyCards=[];
@@ -1518,7 +1530,7 @@
       (live?liveCards:attention?attentionCards:historyCards).push(card);
       const heading=text('div','','terminal-monitor-heading'),status=run.phase==='running'?'Monitoring':run.phase==='review'?'Review needed':run.phase==='finishing'?'Submitting':run.phase==='saved'?'Saved · not armed':attention?'Interrupted':run.phase;
       heading.append(text('strong',`${run.symbol} · ${run.settings.ticket.side}`),text('span',status,'terminal-monitor-badge'));card.append(heading);
-      card.append(text('span',(run.name||`${run.symbol} setup`)+(run.id===selectedMonitorId?' · Selected':''),'terminal-monitor-name'));
+      card.append(text('span',monitorDisplayName(run)+(run.id===selectedMonitorId?' · Selected':''),'terminal-monitor-name'));
       const row=run.rows[run.applied.index];
       if(row)card.append(text('strong',`Step ${run.applied.index+1} of ${run.rows.length} · ${row.mode==='CANDLE'?row.timeframe+' · ':''}${C.rules[row.rule]||row.rule}`,'terminal-monitor-rule'));
       const facts=text('div','','terminal-monitor-facts');
@@ -1546,6 +1558,9 @@
         details.addEventListener('toggle',()=>{if(!details.isConnected)return;if(details.open){monitorEstimateOpen.add(run.id);if(!monitorEstimates.has(run.id))loadMonitorEstimate(run.id);}else monitorEstimateOpen.delete(run.id);});
         card.append(details);fillMonitorEstimate(details,run);
       }
+      const detail=document.createElement('details');detail.className='terminal-monitor-row-details';detail.open=monitorDetailsOpen.has(run.id);detail.append(text('summary','Details · cancellation & estimate'));
+      for(const node of [...card.children])if(node.matches('.terminal-monitor-cancel,.terminal-monitor-meta,.terminal-monitor-waiting-text,.terminal-monitor-recovery,.terminal-monitor-estimate'))detail.append(node);
+      detail.addEventListener('toggle',()=>{if(!detail.isConnected)return;if(detail.open)monitorDetailsOpen.add(run.id);else monitorDetailsOpen.delete(run.id);});card.append(detail);
       return card;
     });
     const symbolGroups=items=>{
@@ -1554,11 +1569,12 @@
       return [...groups].map(([symbol,rows])=>{const group=text('section','','terminal-monitor-symbol-group');group.dataset.monitorSymbol=symbol;group.setAttribute('aria-label',symbol+' setups');group.append(text('h5',`${symbol} · ${rows.length} setup${rows.length===1?'':'s'}`),...rows);return group;});
     };
     const sections=[];
-    if(liveCards.length)sections.push(text('h4',`Monitoring now · ${liveCards.length}`),...symbolGroups(liveCards));
-    if(attentionCards.length)sections.push(text('h4',`Needs attention · ${attentionCards.length}`),...symbolGroups(attentionCards));
-    if(historyCards.length){const history=document.createElement('details');history.className='terminal-monitor-history';history.open=historyOpen;history.append(text('summary',`History · ${historyCards.length} stopped / completed`),...symbolGroups(historyCards));sections.push(history);}
+    if(liveCards.length&&['all','active'].includes(monitorFilter))sections.push(text('h4',`Monitoring now · ${liveCards.length}`),...symbolGroups(liveCards));
+    if(attentionCards.length&&['all','attention'].includes(monitorFilter))sections.push(text('h4',`Needs attention · ${attentionCards.length}`),...symbolGroups(attentionCards));
+    if(historyCards.length&&['all','history'].includes(monitorFilter)){const history=document.createElement('details');history.className='terminal-monitor-history';history.open=historyOpen||monitorFilter==='history';history.append(text('summary',`History · ${historyCards.length} stopped / completed`),...symbolGroups(historyCards));sections.push(history);}
+    if(!sections.length&&cards.length)sections.push(text('p','No setups in this view.','terminal-muted'));
     if(!cards.length)sections.push(text('p','No server setups yet. Configure a draft and click Start.','terminal-muted'));
-    else if(!liveCards.length)sections.unshift(text('p','Nothing is actively monitoring.','terminal-monitor-empty'));
+    else if(!liveCards.length&&['all','active'].includes(monitorFilter))sections.unshift(text('p','Nothing is actively monitoring.','terminal-monitor-empty'));
     el('monitor-list').replaceChildren(...sections);updateMonitorEstimateAges();
   }
   async function openMonitoredSetup(id,showBuilder=true){

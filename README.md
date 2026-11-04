@@ -417,3 +417,5 @@ An order-submission intent is saved before sending. If the app stops before its 
 ### Monitoring workspace
 
 The monitoring popup compares setups across all symbols, grouped by symbol, without taking space below the chart. Each row shows the side, current condition and timeframe, risk or lot size, cancellation level and status. Active setups appear first; saved/interrupted setups are under Needs attention, and stopped/completed runs are in collapsed History. Open monitoring workspace in the sidebar opens the popup; Close or Escape dismisses it. View on chart selects the setup without opening its editor. Open setup edits its draft; running settings change only after an explicit Start. Hiding or expanding the workspace does not change monitoring.
+
+The top toolbar Monitoring button shows the active count and opens the popup even with the setup sidebar hidden. All, Monitoring, Needs attention and History filters narrow the view. Rows start compact; expand Details for cancellation, waiting explanations and estimates. Numbered default names are displayed as descriptions of the first condition; custom names are preserved.

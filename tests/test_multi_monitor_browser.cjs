@@ -23,6 +23,18 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  const a=await setup(1.104,'AUTO','Buy breakout'),b=await setup(1.104,'AUTO','Buy confirmation');
  let state=(await post('test/feed')).state;assert.equal(state.runs.filter(r=>r.phase==='running').length,2);assert.equal(new Set(state.runs.map(r=>r.symbol)).size,1);
  await page.waitForFunction(()=>document.querySelector('#terminal-monitor-count').textContent==='2 active');
+ await page.locator('#terminal-toggle-ticket').click();
+ await page.locator('#terminal-monitor-toolbar').click();
+ assert.match(await page.locator('#terminal-monitor-toolbar').textContent(),/Monitoring · 2/);
+ assert.equal(await page.locator('.terminal-monitor-row-details[open]').count(),0,'rows start compact');
+ for(const filter of ['attention','history']){await page.locator(`[data-monitor-filter="${filter}"]`).click();assert.match(await page.locator('#terminal-monitor-list').textContent(),/No setups in this view/);}
+ await page.locator('[data-monitor-filter="active"]').click();assert.equal(await page.locator('.terminal-monitor-card').count(),2);
+ await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-row-details>summary`).click();
+ assert.equal(await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-row-details`).evaluate(e=>e.open),true);
+ await page.locator('[data-monitor-filter="all"]').click();
+ assert.equal(await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-row-details`).evaluate(e=>e.open),true,'expanded details survive rerender');
+ await page.locator('#terminal-monitor-workspace-close').click();
+ await page.locator('#terminal-toggle-ticket').click();
  await page.locator('#terminal-monitor-workspace-open').click();
  assert.equal(await page.locator('#terminal-monitor-workspace').evaluate(e=>e.classList.contains('is-expanded')),true);
  await page.locator('#terminal-monitor-workspace').screenshot({path:path.join(root,'work/monitor-workspace-desktop.png')});

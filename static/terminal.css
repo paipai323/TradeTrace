@@ -199,3 +199,16 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 
 /* Monitoring is popup-only; it never consumes chart height. */
 .terminal-center>.terminal-monitor-workspace{position:fixed;top:12vh;left:50%;transform:translateX(-50%);width:min(1200px,92vw);max-height:72vh;height:auto;z-index:40;box-sizing:border-box;overflow:auto}
+
+#terminal-monitor-filters{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}#terminal-monitor-filters [aria-pressed=true]{background:#245044;border-color:#64c4ab;color:#b1f8df}
+.terminal-monitor-workspace .terminal-monitor-card{padding:10px;gap:5px 14px}
+.terminal-monitor-workspace .terminal-monitor-row-details{grid-column:2/-1;grid-row:2/span 2;font-size:12px;min-width:0}
+.terminal-monitor-row-details>summary{cursor:pointer;color:#98c8df;padding:5px 0}
+.terminal-monitor-row-details[open]{padding:8px;border:1px solid #304a60;border-radius:5px}
+.terminal-monitor-row-details>p,.terminal-monitor-row-details>span{display:block;margin:8px 0;line-height:1.6}
+.terminal-monitor-workspace .terminal-monitor-row-actions{grid-column:1;grid-row:3}
+.terminal-monitor-workspace .terminal-monitor-rule{font-size:12px}
+@media(max-width:1050px){.terminal-monitor-workspace .terminal-monitor-row-details{grid-column:2;grid-row:2/span 4}.terminal-monitor-workspace .terminal-monitor-row-actions{grid-row:auto;grid-column:1}}
+@media(max-width:600px){.terminal-monitor-workspace .terminal-monitor-card{display:flex}.terminal-monitor-row-details{width:100%;box-sizing:border-box}}
+
+.terminal-monitor-workspace .terminal-monitor-row-actions{align-self:start;align-items:start}

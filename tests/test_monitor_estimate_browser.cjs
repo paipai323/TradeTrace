@@ -11,7 +11,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  const post=async(route,body={})=>{const response=await context.request.post(url+'/api/'+route,{headers:{'X-Replay-Token':token},data:body});assert.equal(response.status(),200,await response.text());return response.json();};
  const waitState=async(predicate)=>{const until=Date.now()+12000;while(Date.now()<until){const value=await post('test/feed');if(predicate(value))return value;await new Promise(r=>setTimeout(r,100));}throw Error('Monitor state timeout: '+JSON.stringify(await post('test/feed')));};
  const setup=async(level,action,name,minimum=0)=>{
-  await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-monitor-add').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);await page.locator('#terminal-setup-tab-order').click();await page.locator('#terminal-sl').fill('1.09');await page.locator('#terminal-tp').fill('1.12');
+  await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-monitor-toolbar').click();await page.locator('#terminal-monitor-add').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);await page.locator('#terminal-setup-tab-order').click();await page.locator('#terminal-sl').fill('1.09');await page.locator('#terminal-tp').fill('1.12');
   await page.locator('#terminal-setup-tab-conditions').click();await page.locator('#terminal-condition-add').click();await page.locator('.terminal-condition-row [data-field=level]').fill(String(level));
   await page.locator('#terminal-monitor-name').fill(name);if(minimum){await page.locator('#terminal-quality-enabled').check();await page.locator('#terminal-quality-settings').evaluate(e=>e.open=true);await page.locator('#terminal-quality-min_rr').fill(String(minimum));}
   await page.locator('#terminal-condition-action').selectOption(action);await page.locator('#terminal-condition-start').click();
@@ -19,11 +19,11 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  };
 
  let requests=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/api/terminal/conditions/estimate')requests++;});
- const first=await setup(1.2,'AUTO','Estimate pass');let card=page.locator(`[data-monitor-id="${first}"]`);await card.locator('.terminal-monitor-estimate>summary').click();
+ const first=await setup(1.2,'AUTO','Estimate pass');let card=page.locator(`[data-monitor-id="${first}"]`);await page.locator('#terminal-monitor-toolbar').click();await card.locator(':scope>.terminal-monitor-row-details>summary').click();await card.locator('.terminal-monitor-estimate>summary').click();
  await card.locator('.terminal-estimate-outcome').filter({hasText:'Would pass'}).waitFor();assert.match(await card.locator('.terminal-monitor-estimate-body').textContent(),/modeled risk.*Available RR/);
  const before=(await post('test/feed'));assert.equal(before.previews,0);assert.equal(before.sent,0);assert.equal(before.state.run.phase,'running');assert.equal(before.state.run.applied.index,0);
  await page.waitForTimeout(2200);assert.equal(requests,1,'estimates do not poll automatically');
- const second=await setup(1.2,'AUTO','Estimate skip',2);const other=page.locator(`[data-monitor-id="${second}"]`);await other.locator('.terminal-monitor-estimate>summary').click();
+ const second=await setup(1.2,'AUTO','Estimate skip',2);const other=page.locator(`[data-monitor-id="${second}"]`);await page.locator('#terminal-monitor-toolbar').click();await other.locator(':scope>.terminal-monitor-row-details>summary').click();await other.locator('.terminal-monitor-estimate>summary').click();
  await other.locator('.terminal-estimate-outcome').filter({hasText:'Would skip'}).waitFor();assert.match(await other.locator('.terminal-monitor-estimate-body').textContent(),/below minimum/);
  let state=await post('test/feed');assert.equal(state.state.runs.filter(run=>run.phase==='running').length,2,'estimate failure does not skip a real monitor');assert.equal(state.previews,0);assert.equal(state.sent,0);
  card=page.locator(`[data-monitor-id="${first}"]`);await card.locator('.terminal-estimate-age').evaluate(node=>node.dataset.received=String(Date.now()-20000));await card.locator('.terminal-estimate-age').filter({hasText:'Old estimate'}).waitFor();
