@@ -47,7 +47,10 @@ class PersistenceTests(unittest.TestCase):
         self.assertIsNone(self.restore().run)
 
     def test_completion_is_not_restored_as_waiting(self):
-        self.monitor.start(self.body);self.advance(101);self.assertEqual(len(self.terminal.sent),1);self.assertIsNone(self.restore().run)
+        self.monitor.start(self.body);self.advance(101);self.assertEqual(len(self.terminal.sent),1)
+        restored=self.restore();run=restored.status()['run'];self.assertEqual(run['phase'],'finished');self.assertEqual(run['result']['order'],'42');self.assertEqual(run['result']['deal'],'43')
+        self.assertIsNone(run['review']);restored.tick();self.assertEqual(len(self.terminal.sent),1)
+        restored.close();again=self.restore();self.assertEqual(again.run['phase'],'finished');self.assertEqual(again.run['result']['order'],'42')
 
     def test_previous_frozen_cancellation_survives_without_reusing_progress(self):
         self.body['settings']['invalidation']=dict(enabled=True,source='LEVEL',direction='BELOW',level=90)
@@ -117,3 +120,29 @@ class PersistenceTests(unittest.TestCase):
     def test_stop_all_dismisses_unknown_outcome_configuration(self):
         self.terminal.failure='Execution outcome unknown';self.monitor.start(self.body);self.advance(101);self.monitor.stop({'all':True})
         self.assertIsNone(self.restore().run)
+
+    def test_skipped_and_invalidated_history_survives(self):
+        for phase in ('skipped','invalidated'):
+            self.body['request_id']='history-'+phase;self.monitor.start(self.body)
+            self.monitor.run.update(phase=phase,message='Test historical result',attempted=True)
+            self.monitor._persist();restored=self.restore()
+            self.assertEqual(restored.run['phase'],phase);self.assertIsNone(restored.run['result']);restored.tick();self.assertEqual(self.terminal.sent,[])
+
+    def test_journal_recovers_missing_finished_execution(self):
+        from journal import Journal
+        from types import SimpleNamespace
+        journal=Journal(Path(self.temp.name)/'journal.sqlite3')
+        run=self.monitor.start(self.body)['run'];self.monitor.stop()
+        setup=dict(monitor_id=run['id'],name='Recovered',settings=run['settings'],rows=run['rows'],started=run['started'],invalidation=run['invalidation'])
+        journal.record_condition_entry('journal-recovery',123,'Demo','USD',dict(setup=setup,request=dict(symbol=run['symbol']),result=dict(retcode=10009,order='99',deal='100'),demo=True))
+        self.terminal.bridge=SimpleNamespace(journal=journal)
+        restored=self.restore();result=restored.status()['run'];self.assertEqual(result['phase'],'finished');self.assertEqual(result['result']['order'],'99');self.assertEqual(result['name'],'Recovered')
+        restored.tick();self.assertEqual(self.terminal.sent,[])
+        restored._persist();again=self.restore();self.assertEqual(len(again.runners),1);self.assertEqual(again.run['id'],run['id'])
+
+    def test_stop_all_and_restart_do_not_erase_completed_history(self):
+        original=self.monitor.start(self.body)['run']['id'];self.advance(101)
+        self.monitor.stop({'all':True});self.assertEqual(self.restore().run['phase'],'finished')
+        other=copy.deepcopy(self.body);other.update(request_id='replace-finished-history',replace_id=original)
+        self.monitor.start(other)
+        restored=self.restore();self.assertIn(original,restored.runners);self.assertEqual(restored.runners[original].run['phase'],'finished')

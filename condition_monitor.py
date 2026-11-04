@@ -13,6 +13,10 @@ from monitor_store import MonitorStore
 from entry_quality import EntryQualitySkipped, validate_quality, resolve_quality, check_quality
 
 
+def completed_history(run):
+    return run['phase'] in ('finished','skipped','invalidated') and not (run.get('_submission_intent') or run.get('sent') and not run.get('result'))
+
+
 class MonitorInterruption(ValueError):
     def __init__(self,message,kind='connection',quote_time=None):
         super().__init__(message);self.kind=kind;self.quote_time=quote_time
@@ -374,12 +378,15 @@ class ConditionMonitor:
             run=runner.run
             if run.get('_dismissed'):continue
             uncertain=bool(run.get('_submission_intent') or run.get('sent') and not run.get('result'))
-            eligible=run['phase'] in self.ACTIVE or run['phase']=='saved' or run['phase']=='stopped' and ((run.get('interruption') or {}).get('enabled') or run.get('_preserve_for_restart')) or uncertain
+            historical=completed_history(run)
+            eligible=historical or run['phase'] in self.ACTIVE or run['phase']=='saved' or run['phase']=='stopped' and ((run.get('interruption') or {}).get('enabled') or run.get('_preserve_for_restart')) or uncertain
             if not eligible:continue
             prior=run.get('saved') or {};request=self.requests.get(run.get('request_id'))
             records.append(dict(id=run['id'],name=run.get('name',''),account=run['account'],server=run['server'],demo=run['demo'],symbol=run['symbol'],settings=copy.deepcopy(run['settings']),rows=copy.deepcopy(run['rows']),
                                group=run.get('group',''),group_policy=run.get('group_policy','ALL'),invalidation=copy.deepcopy(run['invalidation']),started=run['started'],
                                previous_phase=prior.get('previous_phase',run['phase']),uncertain=uncertain or bool(prior.get('uncertain')),request_id=run.get('request_id'),fingerprint=request[0] if request else prior.get('fingerprint')))
+            if historical:
+                records[-1]['history']=dict(phase=run['phase'],result=copy.deepcopy(run.get('result')),message=run.get('message',''),sent=bool(run.get('sent')),attempted=bool(run.get('attempted')),index=run['sequence'].index)
         active_ids={key for key,runner in (self.runners if runners is None else runners).items() if runner.run['phase'] in self.ACTIVE}
         while len(records)>100:
             removable=next((i for i,record in enumerate(records) if record['id'] not in active_ids),None)
@@ -404,6 +411,13 @@ class ConditionMonitor:
         try:data=self.store.load()
         except Exception as error:self._store_load_blocked=True;self.storage_warning='Saved setups could not be loaded; the original file is preserved. '+str(error);return
         failures=0
+        journal=getattr(getattr(self.terminal,'bridge',None),'journal',None)
+        if journal and hasattr(journal,'monitor_history_records'):
+            try:
+                known={record.get('id') for record in data['records'] if isinstance(record,dict)}
+                recovered=[record for record in journal.monitor_history_records() if record['id'] not in known]
+                data['records']=(recovered+data['records'])[-100:]
+            except Exception as error:self.storage_warning='Journal setup recovery unavailable: '+str(error)
         for record in data['records']:
             try:
                 if not isinstance(record,dict):raise ValueError('Invalid record.')
@@ -425,7 +439,14 @@ class ConditionMonitor:
                                 name=record.get('name','') or record['symbol']+' saved setup',group=record.get('group',''),group_policy=record.get('group_policy','ALL'),settings=settings,rows=sequence.rows,sequence=sequence,action=settings['action'],phase='saved',attempted=False,sent=False,
                                 started=record.get('started') if finite(record.get('started')) else int(self.clock()*1000),last_poll=None,last_quote_time=None,last_observed_at=None,interruption=None,invalidation=guard,invalidation_trigger=None,
                                 events=[],event_no=0,observations=[],review=None,result=None,saved=saved,_cancel=threading.Event(),message='Saved—review to restart. Automatic entry is disarmed; every step starts from the beginning.'+(' Previous submission outcome may be uncertain. Check MT5 positions/history before re-arming.' if saved['uncertain'] else ''))
-                runner.before_send=self._before_auto_send;runner._event('Restored disarmed',runner.run['message']);self.runners[rid]=runner;self.latest=rid
+                history=record.get('history')
+                if history is not None:
+                    if not isinstance(history,dict) or history.get('phase') not in ('finished','skipped','invalidated') or history.get('result') is not None and not isinstance(history['result'],dict):raise ValueError('Invalid saved history.')
+                    runner.run.update(phase=history['phase'],result=copy.deepcopy(history.get('result')),message=str(history.get('message','Finished setup restored from history.')),sent=bool(history.get('sent')),attempted=bool(history.get('attempted')),saved=None)
+                    index=history.get('index',len(sequence.rows))
+                    if not isinstance(index,int) or not 0<=index<=len(sequence.rows):raise ValueError('Invalid saved progress.')
+                    sequence.index=index
+                runner.before_send=self._before_auto_send;runner._event('Restored history' if history is not None else 'Restored disarmed',runner.run['message']);self.runners[rid]=runner;self.latest=rid
                 request_id=record.get('request_id');fingerprint=record.get('fingerprint')
                 if isinstance(request_id,str) and 8<=len(request_id)<=100 and isinstance(fingerprint,str) and len(fingerprint)==64:self.requests[request_id]=(fingerprint,rid)
             except Exception:failures+=1
@@ -470,10 +491,10 @@ class ConditionMonitor:
         # Validate/freeze the complete new setup before stopping a replaced runner.
         runner=ConditionRun(self.terminal,self.lock,self.clock,self.interval);runner.start(body)
         next_generation=self.generation+1;run=runner.run;run.update(generation=next_generation,name=name.strip() or f'{run["symbol"]} {run["settings"]["ticket"]["side"]} #{next_generation}',group=group,group_policy=policy)
-        prospective={**self.runners,run['id']:runner};records=self._records(prospective,exclude=replace)
+        prospective={**self.runners,run['id']:runner};replaced_history=bool(replace and completed_history(self.runners[replace].run));records=self._records(prospective,exclude=None if replaced_history else replace)
         records[-1]['fingerprint']=fingerprint
         self._persist(strict=True,records=records)
-        if replace:self.runners[replace].run['_dismissed']=True;self.runners[replace].stop({'reason':'Stopped: replaced by an explicitly restarted setup.'})
+        if replace and not replaced_history:self.runners[replace].run['_dismissed']=True;self.runners[replace].stop({'reason':'Stopped: replaced by an explicitly restarted setup.'})
         self.generation=next_generation;runner.before_send=self._before_auto_send
         self.runners[run['id']]=runner;self.latest=run['id'];self.requests[request_id]=(fingerprint,run['id'])
         # Bound completed history, without ever dropping an active setup.
@@ -502,6 +523,7 @@ class ConditionMonitor:
     def stop(self,body=None,*,persist=True):
         body=body or {}
         for runner in self._targets(body):
+            if completed_history(runner.run):continue
             runner.run['_dismissed']=True;runner.stop({key:value for key,value in body.items() if key!='id'})
         if persist:self._persist()
         return self.status({'id':body.get('id') or self.latest})

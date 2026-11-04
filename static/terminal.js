@@ -1394,6 +1394,12 @@
     set('setup-readiness-account',account);el('setup-readiness-account').dataset.live=String(!!market&&!market.demo);
     set('setup-readiness-action',outcome);
     set('setup-readiness-state',blocked.length?`${blocked.length} to fix`:'Ready to start');
+    const next=blocked[0],waiting=checks.find(item=>item.name==='Invalidation'&&item.state==='waiting');
+    set('builder-readiness',next?'Next: '+next.message:waiting?'Next: '+waiting.message:!conditionRows().length?'Next: Add a condition or template. With no conditions, Start acts immediately.':'Ready to start · '+outcome);
+    el('builder-readiness').dataset.ready=String(!next&&!waiting&&conditionRows().length>0);
+    el('builder-fix').hidden=!next;
+    el('builder-fix').onclick=()=>{const step=next&&['Conditions','Linked setups'].includes(next.name)?'conditions':'entry';openSetupBuilder(step);if(next?.name==='Quotes')el('builder-readiness').textContent='Next: Return to the chart and reconnect MT5 for a fresh quote.';else if(next&&['Invalidation','Entry quality'].includes(next.name)){el('setup-builder').classList.add('builder-advanced');el('builder-mode').textContent='Simple view';el('builder-mode').setAttribute('aria-pressed','true');} };
+
     const list=el('setup-readiness-checks'),key=JSON.stringify(checks);
     if(list.dataset.key!==key){list.dataset.key=key;list.replaceChildren(...checks.map(item=>{const row=text('li',`${item.state==='blocked'?'Fix':item.state==='pending'?'At execution':item.state==='waiting'?'While monitoring':'OK'} · ${item.name}: ${item.message}`);row.dataset.state=item.state;return row;}));}
     el('condition-start').disabled=!!blocked.length;
@@ -1495,10 +1501,15 @@
     }catch(error){conditionMessage('Review unavailable: '+error.message);}
   }
   function syncConditionStartLabel(){el('condition-start').textContent=el('condition-action').value==='AUTO'?'Arm automatic entry':el('condition-action').value==='REVIEW'?'Start conditions for review':'Start conditions';}
+  const monitorOutcomes=new Map();
+  let outcomeRevision=0;
   let monitorFilter='all',monitorOpener=null;
   const monitorDetailsOpen=new Set();
+  try{const saved=JSON.parse(localStorage.getItem('tradetrace.monitorView')||'{}');if(['all','active','attention','history'].includes(saved.filter))monitorFilter=saved.filter;for(const id of (Array.isArray(saved.expanded)?saved.expanded:[]).slice(0,100))if(typeof id==='string')monitorDetailsOpen.add(id);}catch(_){}
+  function saveMonitorView(){try{localStorage.setItem('tradetrace.monitorView',JSON.stringify({filter:monitorFilter,expanded:[...monitorDetailsOpen].slice(-100)}));}catch(_){}}
+  for(const item of el('monitor-filters').querySelectorAll('button'))item.setAttribute('aria-pressed',String(item.dataset.monitorFilter===monitorFilter));
   el('monitor-toolbar').onclick=()=>showMonitorWorkspace();
-  for(const button of el('monitor-filters').querySelectorAll('button'))button.onclick=()=>{monitorFilter=button.dataset.monitorFilter;for(const item of el('monitor-filters').querySelectorAll('button'))item.setAttribute('aria-pressed',String(item===button));renderMonitorList();};
+  for(const button of el('monitor-filters').querySelectorAll('button'))button.onclick=()=>{monitorFilter=button.dataset.monitorFilter;for(const item of el('monitor-filters').querySelectorAll('button'))item.setAttribute('aria-pressed',String(item===button));saveMonitorView();renderMonitorList();};
   function monitorDisplayName(run){
     const side=run.settings.ticket.side,legacy=`${run.symbol} ${side} #`,name=run.name||'';
     if(name&&!((name.startsWith(legacy)&&/^\d+$/.test(name.slice(legacy.length)))||name===run.symbol+' saved setup'))return name;
@@ -1516,10 +1527,13 @@
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!el('setup-builder').open&&!el('monitor-workspace').hidden)hideMonitorWorkspace();});
   function renderMonitorList(){
     const active=serverMonitors.filter(r=>['running','review','finishing'].includes(r.phase)),saved=serverMonitors.filter(r=>r.phase==='saved');el('monitor-count').textContent=`${active.length} active${saved.length?' · '+saved.length+' saved':''}`;
-    el('monitor-toolbar').textContent=`Monitoring · ${active.length}`;
+    const attentionCount=serverMonitors.filter(r=>r.phase==='review'||r.phase==='saved'||(r.phase==='stopped'&&r.interruption?.enabled)).length;
+    el('monitor-toolbar').replaceChildren(document.createTextNode(`Monitoring · ${active.length}`));
+    if(attentionCount)el('monitor-toolbar').append(text('span',`${attentionCount} need attention`,'terminal-monitor-attention-badge'));
+    el('monitor-toolbar').title=attentionCount?`${attentionCount} setups need review or restart`:'Open monitoring workspace';
     el('monitor-overview').textContent=el('monitor-count').textContent+' · all symbols';
     el('monitor-stop-all').disabled=!active.length&&!saved.length;el('monitor-add').disabled=conditionBusy||submitting||reviewing||closing;
-    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview,r.interruption?.checked_at,r.interruption?.enabled]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing,monitorFilter]));
+    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview,r.interruption?.checked_at,r.interruption?.enabled]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing,monitorFilter,outcomeRevision]));
     if(el('monitor-list').dataset.key===key)return;el('monitor-list').dataset.key=key;
     const previousHistory=el('monitor-list').querySelector('.terminal-monitor-history'),historyOpen=previousHistory?.open===true;
     const liveCards=[],attentionCards=[],historyCards=[];
@@ -1551,7 +1565,20 @@
       actions.className='terminal-monitor-row-actions';
       const view=text('button','View on chart');view.type='button';view.disabled=open.disabled;view.onclick=async()=>{await openMonitoredSetup(run.id,false);if(selectedMonitorId===run.id){hideMonitorWorkspace();}};
       open.title='Edit draft. Running settings change only after explicit Start.';
-      actions.append(open,stop,view);card.append(actions);
+      const duplicate=text('button','Duplicate draft');duplicate.type='button';duplicate.disabled=open.disabled;duplicate.onclick=()=>duplicateMonitoredSetup(run.id);
+      actions.append(open,stop,view,duplicate);card.append(actions);
+      if(!['running','review','finishing','saved'].includes(run.phase)){
+        const area=text('div','','terminal-monitor-outcome'),cached=monitorOutcomes.get(run.id),value=cached?.value;
+        const labels={pending:'Waiting to fill',open:'Position open',closed:'Trade closed',cancelled:'Cancelled',expired:'Expired',rejected:'Rejected',unknown:'Outcome unconfirmed',shared:'Shared position',no_order:'No order submitted'};
+        const initial=run.result?( [10008,10009,10010].includes(run.result.retcode)?'Submitted · check trade outcome':'Broker rejected request'):'No confirmed trade result';
+        area.append(text('strong',value?labels[value.state]||value.state:initial));
+        if(value){const amount=value.state==='closed'?value.net:value.state==='open'?value.floating:null;area.append(text('p',value.message+(Number.isFinite(amount)?` ${amount>=0?'+':''}${amount.toFixed(2)} ${value.currency}${value.state==='open'?' floating':''}${Number.isFinite(value.r_multiple)?' · '+(value.r_multiple>=0?'+':'')+value.r_multiple.toFixed(2)+'R':''}`:'')));area.append(text('small',`Checked ${new Date(value.checked_at*1000).toLocaleTimeString()} · refresh for current status`));}
+        if(cached?.error)area.append(text('p','Check unavailable: '+cached.error));
+        const check=text('button',cached?.busy?'Checking MT5…':value?'Refresh trade outcome':'Check trade outcome');check.type='button';check.disabled=!!cached?.busy||run.scope!==scope;
+        check.onclick=async()=>{monitorOutcomes.set(run.id,{...cached,busy:true});outcomeRevision++;renderMonitorList();try{const result=await call('terminal/conditions/outcome',{id:run.id});monitorOutcomes.set(run.id,{value:result.outcome});}catch(error){monitorOutcomes.set(run.id,{value:cached?.value,error:error.message});}finally{outcomeRevision++;renderMonitorList();}};
+        area.append(check);card.append(area);
+      }
+
       if(run.phase==='running'){
         const details=document.createElement('details');details.className='terminal-monitor-estimate';details.dataset.estimateId=run.id;details.open=monitorEstimateOpen.has(run.id);
         details.append(text('summary','If triggered now'),text('div','','terminal-monitor-estimate-body'));
@@ -1559,8 +1586,8 @@
         card.append(details);fillMonitorEstimate(details,run);
       }
       const detail=document.createElement('details');detail.className='terminal-monitor-row-details';detail.open=monitorDetailsOpen.has(run.id);detail.append(text('summary','Details · cancellation & estimate'));
-      for(const node of [...card.children])if(node.matches('.terminal-monitor-cancel,.terminal-monitor-meta,.terminal-monitor-waiting-text,.terminal-monitor-recovery,.terminal-monitor-estimate'))detail.append(node);
-      detail.addEventListener('toggle',()=>{if(!detail.isConnected)return;if(detail.open)monitorDetailsOpen.add(run.id);else monitorDetailsOpen.delete(run.id);});card.append(detail);
+      for(const node of [...card.children])if(node.matches('.terminal-monitor-cancel,.terminal-monitor-meta,.terminal-monitor-recovery,.terminal-monitor-estimate'))detail.append(node);
+      detail.addEventListener('toggle',()=>{if(!detail.isConnected)return;if(detail.open)monitorDetailsOpen.add(run.id);else monitorDetailsOpen.delete(run.id);saveMonitorView();});card.append(detail);
       return card;
     });
     const symbolGroups=items=>{
@@ -1593,8 +1620,18 @@
       conditionHistorySuspended=false;resetConditionUndo();saveConditions();updateOrderHint();syncDraftLines();selectSetupTab('conditions');
       receiveServerConditions({run,runs:serverMonitors});
       if(showBuilder&&!el('quick-editor').open)openSetupBuilder(run.phase==='review'?'review':'conditions');
+      return true;
     }catch(error){conditionHistorySuspended=false;conditionMessage(error.message);}
     finally{conditionBusy=false;updateTicket();}
+  }
+  async function duplicateMonitoredSetup(id){
+    const original=serverMonitors.find(run=>run.id===id);if(!original||conditionBusy||submitting||reviewing||closing)return;
+    if(!await openMonitoredSetup(id,false)||selectedMonitorId!==id)return;
+    invalidate();selectedMonitorId='';serverMonitor=null;serverStateKey='';serverDetachedId='';serverReviewShown='';conditionFinished='';conditionApplied=null;
+    setMonitorSettings({name:monitorDisplayName(original)+' (copy)',group:'',group_policy:'ALL'});
+    el('condition-action').value='ALERT';syncConditionStartLabel();saveConditions();renderMonitorList();
+    conditionMessage('Duplicated as an alerts-only draft. Original monitoring continues. Review settings and explicitly Start to arm this copy.');
+    openSetupBuilder('conditions');
   }
   el('monitor-add').onclick=()=>{
     if(conditionBusy||submitting||reviewing||closing)return;
@@ -1736,6 +1773,15 @@
     const facts=[['Execution',{ALERT:'Alerts only',REVIEW:'Prepare order for review',AUTO:'One automatic entry attempt'}[el('condition-action').value]],['Entry',plan.enabled?(plan.entry==='RETEST'?'Limit retest · expires in '+plan.expiry+' minutes':'Market after confirmation'):side+' '+(el('order-kind').value==='MARKET'?'market':'pending at '+el('order-price').value)],['Risk & target',plan.enabled?`${plan.risk}% equity · ${plan.rr}R target · ${plan.timeframe} swing stop (${plan.sensitivity} candles, ${plan.buffer} ticks)`:`${el('volume').value||'—'} lots · SL ${el('sl').value||'not set'} · TP ${el('tp').value||'not set'}`],['Cancellation',invalidationDescription(readInvalidation())],['Entry quality',qualityDescription(readEntryQuality())],['Linked setups',readMonitorSettings().group?readMonitorSettings().group+' · '+(readMonitorSettings().group_policy==='FIRST_ENTRY'?'first entry stops others':'all may enter'):'Independent'],['Timing',`Timeout ${el('condition-timeout').value||0} min · quote-gap reset ${el('condition-gap').value||0} sec`]];
     const factsNode=el('builder-facts'),factsKey=JSON.stringify(facts);if(factsNode.dataset.key!==factsKey){factsNode.dataset.key=factsKey;factsNode.replaceChildren(...facts.flatMap(([label,value])=>[text('dt',label),text('dd',value)]));}
   }
+  el('builder-use-chart').onclick=()=>{
+    const frame=el('timeframe').value,symbol=el('symbol').value;
+    if(!C.frames.includes(frame)){el('builder-readiness').textContent=`Choose a supported chart timeframe first: ${C.frames.join(', ')}.`;return;}
+    if(conditionBusy||submitting||reviewing||closing)return;
+    for(const row of el('condition-list').querySelectorAll('.terminal-condition-row')){const input=row.querySelector('[data-field=timeframe]');if(input){input.value=frame;input.dispatchEvent(new Event('change',{bubbles:true}));}}
+    for(const id of ['condition-starter-frame','auto-plan-timeframe','invalidation-timeframe']){const input=el(id);if(input){input.value=frame;input.dispatchEvent(new Event('change',{bubbles:true}));}}
+    saveConditions();renderBuilderSummary();renderSetupReadiness();
+    el('builder-use-chart').textContent=`Applied ${symbol} · ${frame}`;
+  };
   el('builder-open').onclick=()=>openSetupBuilder('conditions');
   for(const name of ['conditions','entry','review'])el('builder-step-'+name).onclick=()=>setBuilderStep(name);
   el('builder-close').onclick=()=>closeSetupBuilder();el('builder-chart').onclick=()=>closeSetupBuilder(true);

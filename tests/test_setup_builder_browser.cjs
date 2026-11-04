@@ -17,6 +17,15 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  assert.equal(await page.locator('#terminal-builder-step-conditions').getAttribute('aria-current'),'step');
  await page.locator('#terminal-condition-starter-risk').fill('0.75');await page.locator('#terminal-condition-starter-load').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);
  assert.equal(await page.locator('.terminal-condition-row [data-field=rule]').inputValue(),'MS_UP');
+ const chartFrame=await page.locator('#terminal-timeframe').inputValue();
+ await page.locator('#terminal-builder-use-chart').click();
+ assert.equal(await page.locator('.terminal-condition-row [data-field=timeframe]').inputValue(),chartFrame);
+ assert.equal(await page.locator('#terminal-auto-plan-timeframe').inputValue(),chartFrame);
+ assert.equal(await page.locator('#terminal-invalidation-timeframe').inputValue(),chartFrame);
+ assert.match(await page.locator('#terminal-builder-use-chart').textContent(),/Applied EURUSD/);
+ assert.ok((await page.locator('#terminal-builder-readiness').textContent()).length>20,'one next-action message is visible');
+ assert.equal((await post('test/feed')).sent,0,'using chart does not submit');
+
  await page.locator('#terminal-builder-next').click();assert.equal(await page.locator('#terminal-builder-step-entry').getAttribute('aria-current'),'step');
  assert.equal(await page.locator('#terminal-auto-plan-risk').inputValue(),'0.75');assert.equal(await page.locator('#terminal-auto-plan-sensitivity').isVisible(),false);
  await page.locator('#terminal-builder-mode').click();assert.equal(await page.locator('#terminal-auto-plan-sensitivity').isVisible(),true);await page.locator('#terminal-auto-plan-sensitivity').fill('3');
@@ -34,10 +43,10 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  assert.equal((await post('test/feed')).state.run,null,'navigation and editing never start monitoring');assert.equal(manualPreviewRequests,0,'Enter in a builder field never submits the manual ticket');assert.equal(await page.locator('#terminal-side').count(),1,'builder reuses one set of order controls');
  await page.locator('#terminal-setup-builder').screenshot({path:path.join(root,'work/setup-builder-review.png')});
  await page.locator('#terminal-condition-start').click();await waitState(s=>s.state.run?.phase==='running');await page.locator('#terminal-builder-close').click();
- await post('test/feed',{bid:1.105});await waitState(s=>s.state.run.phase==='review');await page.locator('#terminal-monitor-list button').filter({hasText:'Open review'}).click();
+ await post('test/feed',{bid:1.105});await waitState(s=>s.state.run.phase==='review');await page.locator('#terminal-monitor-toolbar').click();await page.locator('#terminal-monitor-list button').filter({hasText:'Open review'}).click();
  await page.locator('#terminal-submit').waitFor();assert.equal(await page.locator('#terminal-setup-builder').isVisible(),true);assert.equal((await post('test/feed')).sent,0,'prepared review still needs explicit send');
  await page.keyboard.press('Escape');assert.equal(await page.locator('#terminal-setup-builder').isVisible(),false);
- await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.run.phase==='stopped');
+ await page.locator('#terminal-monitor-toolbar').click();await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.run.phase==='stopped');await page.locator('#terminal-monitor-workspace-close').click();
  await page.locator('#terminal-quick-editor>summary').click();await page.waitForFunction(()=>document.getElementById('terminal-ticket').parentElement.id==='terminal-quick-editor-host');assert.equal(await page.locator('.terminal-condition-row [data-field=level]').inputValue(),'1.104','cached builder restores the same draft to quick editing');
  await page.locator('#terminal-builder-open').click();await page.locator('#terminal-builder-close').click();assert.equal(await page.locator('#terminal-ticket').evaluate(e=>e.parentElement.id),'terminal-quick-editor-host','an expanded quick editor gets its controls back on close');
  await page.locator('#terminal-quick-editor>summary').click();

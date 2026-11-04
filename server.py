@@ -123,6 +123,11 @@ class Handler(BaseHTTPRequestHandler):
                 result = condition_monitor.recovery(body)
             elif self.path == '/api/terminal/conditions/estimate':
                 result = condition_monitor.estimate(body)
+            elif self.path == '/api/terminal/conditions/outcome':
+                from condition_outcome import outcome
+                run=condition_monitor.status({'id':body.get('id')})['run']
+                if not run:raise ValueError('Setup is no longer in monitoring history. Check MT5 or the journal.')
+                result=dict(outcome=outcome(terminal,run))
             elif self.path == '/api/terminal/conditions/status':
                 result = condition_monitor.status(body)
             elif self.path == '/api/terminal/conditions/stop':

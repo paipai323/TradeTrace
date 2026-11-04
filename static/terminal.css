@@ -212,3 +212,15 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 @media(max-width:600px){.terminal-monitor-workspace .terminal-monitor-card{display:flex}.terminal-monitor-row-details{width:100%;box-sizing:border-box}}
 
 .terminal-monitor-workspace .terminal-monitor-row-actions{align-self:start;align-items:start}
+
+.terminal-monitor-attention-badge{display:inline-block;margin-left:7px;border-radius:4px;background:#614722;color:#ffe3a1;font-size:10px;padding:3px 6px}
+.terminal-monitor-workspace .terminal-monitor-waiting-text{grid-column:2/-1;grid-row:2;line-height:1.5}
+.terminal-monitor-workspace .terminal-monitor-row-details{grid-column:2/-1;grid-row:3}
+.terminal-monitor-workspace .terminal-monitor-row-actions{flex-wrap:wrap;grid-row:3/span 2}
+@media(max-width:1050px){.terminal-monitor-workspace .terminal-monitor-waiting-text{grid-column:2;grid-row:2}.terminal-monitor-workspace .terminal-monitor-row-details{grid-column:2;grid-row:3/span 3}.terminal-monitor-workspace .terminal-monitor-row-actions{grid-row:auto}}
+
+.terminal-builder-next-action{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 24px;background:#192b3a;border-bottom:1px solid #38516b;font-size:12px;line-height:1.6;flex-shrink:0}
+#terminal-builder-readiness[data-ready=true]{color:#9af0ce}.terminal-builder-next-action>button{flex-shrink:0}
+@media(max-width:600px){.terminal-builder-next-action{padding:9px 12px;font-size:11px}.terminal-builder-header-actions{max-width:65%}}
+
+.terminal-monitor-workspace .terminal-monitor-outcome{grid-column:1/-1;display:grid;gap:6px;padding:10px;border:1px solid #3b586e;border-radius:5px;background:#172839}.terminal-monitor-outcome p{font-size:12px;line-height:1.6}.terminal-monitor-outcome small{color:#a2b6c9}.terminal-monitor-outcome button{justify-self:start}

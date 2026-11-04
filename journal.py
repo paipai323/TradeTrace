@@ -110,6 +110,20 @@ class Journal:
             con.execute("INSERT OR IGNORE INTO settings VALUES ('last_account',?)",(account,))
         return account
 
+    def monitor_history_records(self):
+        """Recover immutable accepted condition executions, without touching MT5."""
+        with self.db() as con:
+            rows=con.execute('SELECT account,payload FROM condition_entries ORDER BY created DESC LIMIT 100').fetchall()
+        records=[]
+        for row in reversed(rows):
+            try:
+                payload=json.loads(row['payload']);setup=payload['setup'];result=payload['result'];account,server=json.loads(row['account'])
+                if result.get('retcode') not in (10008,10009,10010):continue
+                records.append(dict(id=setup['monitor_id'],name=setup.get('name',''),account=str(account),server=server,demo=payload['demo'],symbol=payload['request']['symbol'],settings=setup['settings'],rows=setup['rows'],group=setup.get('group',''),group_policy=setup.get('group_policy','ALL'),invalidation=setup.get('invalidation') or {'enabled':False},started=setup['started'],previous_phase='finished',uncertain=False,
+                                    history=dict(phase='finished',result=result,message='Finished execution recovered from journal. Check trade outcome for its current broker status.',sent=True,attempted=True,index=len(setup['rows']))))
+            except (KeyError,TypeError,ValueError):continue
+        return records
+
     def clean_review(self, review):
         if not isinstance(review, dict):
             raise ValueError('Invalid journal review.')

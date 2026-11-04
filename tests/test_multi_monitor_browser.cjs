@@ -31,6 +31,11 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  await page.locator('[data-monitor-filter="active"]').click();assert.equal(await page.locator('.terminal-monitor-card').count(),2);
  await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-row-details>summary`).click();
  assert.equal(await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-row-details`).evaluate(e=>e.open),true);
+ assert.match(await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-waiting-text`).textContent(),/1.10400/);
+ await page.reload();await page.locator('#nav-terminal').click();await page.locator('#terminal-monitor-toolbar').click();
+ await page.waitForFunction(()=>document.querySelectorAll('.terminal-monitor-card').length===2);
+ assert.equal(await page.locator('[data-monitor-filter="active"]').getAttribute('aria-pressed'),'true','filter survives refresh');
+ assert.equal(await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-row-details`).evaluate(e=>e.open),true,'expanded row survives refresh');
  await page.locator('[data-monitor-filter="all"]').click();
  assert.equal(await page.locator(`[data-monitor-id="${a}"]>.terminal-monitor-row-details`).evaluate(e=>e.open),true,'expanded details survive rerender');
  await page.locator('#terminal-monitor-workspace-close').click();
@@ -55,6 +60,13 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  await page.setViewportSize({width:1536,height:1100});
 
  await post('test/feed',{bid:1.105});await waitState(s=>s.sent===2&&s.state.runs.filter(r=>r.phase==='finished').length===2);
+ await page.locator('#terminal-monitor-toolbar').click();await page.locator('[data-monitor-filter="history"]').click();
+ await page.route('**/api/terminal/conditions/outcome',async route=>{assert.equal(route.request().postDataJSON().id,a);await route.fulfill({json:{outcome:{state:'closed',message:'Closed · profit · net includes costs.',net:45,currency:'USD',r_multiple:4.5,checked_at:Date.now()/1000}}});});
+ await page.locator(`[data-monitor-id="${a}"]`).getByRole('button',{name:'Check trade outcome',exact:true}).click();
+ await page.waitForFunction(id=>document.querySelector(`[data-monitor-id="${id}"] .terminal-monitor-outcome`).textContent.includes('+45.00 USD · +4.50R'),a);
+ assert.doesNotMatch(await page.locator(`[data-monitor-id="${b}"] .terminal-monitor-outcome`).textContent(),/45.00/,'outcomes belong to the exact setup');
+ await page.unroute('**/api/terminal/conditions/outcome');await page.locator('[data-monitor-filter="all"]').click();await page.locator('#terminal-monitor-workspace-close').click();
+
  await post('test/feed',{bid:1.103});
  const c=await setup(1.104,'AUTO','Scenario A','Alternatives','FIRST_ENTRY'),d=await setup(1.104,'AUTO','Scenario B','Alternatives','FIRST_ENTRY');
  await post('test/feed',{bid:1.105});state=(await waitState(s=>s.state.runs.find(r=>r.id===d).phase==='stopped')).state;
@@ -62,6 +74,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  await post('test/feed',{bid:1.103});
  const e=await setup(1.104,'REVIEW','Review one'),f=await setup(1.104,'REVIEW','Review two');await post('test/feed',{bid:1.105});
  state=(await waitState(s=>s.state.runs.filter(r=>r.phase==='review').length===2)).state;
+ await page.waitForFunction(()=>document.querySelector('.terminal-monitor-attention-badge')?.textContent==='2 need attention');
  const reviewOne=state.runs.find(r=>r.id===e).review.preview,reviewTwo=state.runs.find(r=>r.id===f).review.preview;assert.notEqual(reviewOne,reviewTwo);
  await page.reload();await page.locator('#nav-terminal').click();await page.locator('#terminal-setup-tab-conditions').click();
  await page.waitForFunction(()=>document.querySelectorAll('.terminal-monitor-card').length===6);
@@ -87,6 +100,14 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
   assert.equal(await group.locator(`[data-monitor-id="${id}"]`).count(),1,'setup stays in its own symbol group');
  }
 
+ await page.locator('#terminal-monitor-toolbar').click();
+ const beforeCopy=await post('test/feed');
+ await page.locator(`[data-monitor-id="${h}"]`).getByRole('button',{name:'Duplicate draft',exact:true}).click();
+ assert.equal(await page.locator('#terminal-condition-action').inputValue(),'ALERT','copy is alerts-only');
+ assert.equal(await page.locator('#terminal-monitor-name').inputValue(),'EUR monitor (copy)');
+ const afterCopy=await post('test/feed');assert.equal(afterCopy.sent,beforeCopy.sent);assert.equal(afterCopy.state.runs.length,beforeCopy.state.runs.length,'duplicate does not start a monitor');
+ assert.equal(afterCopy.state.runs.find(r=>r.id===h).phase,'running','original keeps monitoring');
+ await page.locator('#terminal-builder-close').click();
  await page.locator('#terminal-monitor-workspace-open').click();
  await page.locator(`[data-monitor-id="${g}"] button`).first().click();await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('GBPUSD'));
  assert.equal(await page.locator('#terminal-monitor-name').inputValue(),'GBP monitor');
@@ -95,6 +116,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  state=(await waitState(s=>s.state.runs.find(r=>r.id===g).phase==='stopped')).state;
  assert.equal(state.runs.find(r=>r.id===h).phase,'running','restart affects only the selected symbol/setup');
  await page.locator('#terminal-monitor-workspace-open').click();await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.runs.every(r=>!['running','review','finishing'].includes(r.phase)));
+ const noOrder=await post('terminal/conditions/outcome',{id:h});assert.equal(noOrder.outcome.state,'no_order');
  assert.deepEqual(errors,[]);
  console.log('Multiple monitor browser tests passed: same-symbol independent entries, linked cancellation, separate reviews, reload, individual Stop and Stop all; fake broker only');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{await browser?.close();server.kill();});
