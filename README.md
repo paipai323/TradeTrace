@@ -449,3 +449,16 @@ Accepted setup pending orders stay visible in a Pending orders section in the mo
 The + New setup button shares the same independent-draft action as Add another setup. It detaches the editor from the selected monitor and does not send a stop request. Editing a blank draft cannot replace an existing monitor unless that monitor is explicitly reopened first.
 
 Monitoring History has search (name, symbol, order/deal ID or message), symbol/status filters and rolling started-date ranges. Filters apply only to historical cards, leaving active monitors and pending orders unaffected. Matching history is paginated at ten entries, selected newest-started first and grouped by symbol, with matching/total counts, Previous/Next and Clear filters. Preferences persist locally after browser refresh; filters do not remove stored history or change broker orders.
+
+
+### Exposure, linked orders and setup results
+
+The setup builder shows a compact Combined risk line before Start. Expand it for current-position risk (additional loss from quote to SL), pending-order risk (entry to SL), the proposed draft budget, and other armed setup budgets. Linked alternatives are counted conservatively; missing stops, stale quotes and unestimated fixed-lot setups make totals incomplete. Refresh exposure for a current snapshot. Estimates exclude gaps, costs and slippage, assume no hedge offsets, and do not impose a new trading limit.
+
+Highlight order on a submitted setup switches to its symbol and emphasizes the exact broker order/position entry, SL and TP by broker identifiers. Unmatched or netting linkage is reported rather than guessed from symbol. Show all order levels clears the focus. Highlighting does not amend or cancel orders.
+
+Journal → Setup performance compares linked closed trades by BOS/MS and market, limit retest or confirmation entry. Counts, win rate, net, total planned-risk R and average R use this account's recorded closed trades; duplicate position snapshots are counted once, and missing-risk trades are excluded only from R metrics. This summary is independent of the journal search filters; small samples are not evidence of profitability.
+
+### Retest then rejection confirmation
+
+Automatic trade plan Entry includes Retest then rejection candle → market. After all conditions pass, a matching observed BOS/MS level is fixed and the server watches future closed candles on that condition's timeframe. A BUY retest touches the level with its low, then requires a bullish candle closing above the level; SELL requires a high touching the level and a bearish close below. Touch and rejection can occur in one future candle, or rejection can follow a previous touch. The retest window uses the minutes setting; timeout or missed candles skip entry without replay/retry. Setup invalidation still applies while waiting. On confirmation the server prepares one market attempt, recalculates swing SL, target and risk-sized lots, and requires the live breakout still to hold at submission. Review mode still needs explicit confirmation. This mode does not place a resting pending order. Existing starters and running setups keep their current entry mode until explicitly changed and started again.

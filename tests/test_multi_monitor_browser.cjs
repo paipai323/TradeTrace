@@ -127,6 +127,11 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  await page.locator('#terminal-monitor-toolbar').click();await page.locator('[data-monitor-filter="active"]').click();
  await page.waitForFunction(()=>document.querySelector('#terminal-monitor-toolbar').textContent.includes('1 pending'));
  const pendingCard=page.locator(`[data-monitor-id="${pendingId}"]`);assert.match(await pendingCard.locator('.terminal-monitor-pending-info').textContent(),/1.102/);
+ const pendingState=await post('test/feed');const brokerOrder=pendingState.state.runs.find(run=>run.id===pendingId).result.order;
+ await post('test/feed',{orders:[{ticket:brokerOrder,symbol:'EURUSD',type:2,volume:.01,price:1.102,sl:1.09,tp:1.12}]});
+ await pendingCard.getByRole('button',{name:'Highlight order',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#terminal-broker-focus-info').textContent.includes('Highlighted broker'));
+ assert.equal(await page.locator('#terminal-broker-focus-clear').isVisible(),true);await page.locator('#terminal-broker-focus-clear').click();assert.equal(await page.locator('#terminal-broker-focus-info').isHidden(),true);
+ await page.locator('#terminal-monitor-toolbar').click();
  await page.route('**/api/terminal/conditions/outcome',route=>route.fulfill({json:{outcome:{state:'open',message:'Position open',checked_at:Date.now()/1000+1,position:'999'}}}));
  await pendingCard.getByRole('button',{name:'Check trade outcome',exact:true}).click();
  await page.waitForFunction(()=>!document.querySelector('#terminal-monitor-toolbar').textContent.includes('pending'));

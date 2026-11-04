@@ -34,3 +34,5 @@
 @media(max-width:600px){.journal-setup-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.journal-setup-metrics dd{font-size:15px}.journal-setup-technical-fields{grid-template-columns:1fr;gap:3px}.journal-setup-technical-fields dd{margin-bottom:10px}#journal-trade-condition-entries>div>.journal-setup-card{padding:12px}}
 
 .journal-setup-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}@media(max-width:800px){.journal-setup-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+#journal-setup-performance{border:1px solid #344d66;padding:14px;border-radius:7px;margin:15px 0}#journal-setup-performance summary{cursor:pointer;font-size:15px}#journal-setup-performance p{font-size:12px;line-height:1.6;color:#a7bdd4}#journal-setup-performance-table{overflow:auto}#journal-setup-performance td,#journal-setup-performance th{padding:10px;white-space:nowrap;font-size:13px}

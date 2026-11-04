@@ -81,12 +81,12 @@ class ConditionRun:
             for key,low,high in [('risk',.01,2),('rr',.1,100),('buffer',0,1000000),('sensitivity',1,10)]:
                 value=plan.get(key)
                 if not finite(value) or not low<=value<=high or key in ('buffer','sensitivity') and int(value)!=value:raise ValueError('Invalid automatic plan '+key+'.')
-            if plan.get('timeframe') not in FRAMES or plan.get('entry') not in ('MARKET','RETEST'):raise ValueError('Invalid plan timeframe or entry.')
+            if plan.get('timeframe') not in FRAMES or plan.get('entry') not in ('MARKET','RETEST','CONFIRM'):raise ValueError('Invalid plan timeframe or entry.')
             if plan.get('stop_basis','SWING') not in ('SWING','SIGNAL') or not isinstance(plan.get('hold_breakout',False),bool):raise ValueError('Invalid automatic plan protection options.')
-            if plan.get('stop_basis')=='SIGNAL' or plan.get('hold_breakout') and plan['entry']=='MARKET':
+            if plan.get('stop_basis')=='SIGNAL' or plan.get('hold_breakout') and plan['entry'] in ('MARKET','CONFIRM'):
                 suffix='_UP' if ticket['side']=='BUY' else '_DOWN'
                 if not any(row['rule'] in STRUCTURE and row['rule'].endswith(suffix) for row in sequence.rows):raise ValueError('Breakout protection needs a matching BOS/MS condition.')
-            if plan['entry']=='RETEST':
+            if plan['entry'] in ('RETEST','CONFIRM'):
                 expiry=plan.get('expiry');suffix='_UP' if ticket['side']=='BUY' else '_DOWN'
                 if not finite(expiry) or int(expiry)!=expiry or not 1<=expiry<=1440:raise ValueError('Invalid retest expiry.')
                 if not any(row['rule'] in STRUCTURE and row['rule'].endswith(suffix) for row in sequence.rows):raise ValueError('Retest needs a matching BOS/MS condition.')
@@ -262,7 +262,9 @@ class ConditionRun:
             run['last_quote_time']=data['quote_time'];run['last_observed_at']=self.clock()
             if self._check_invalidation(data):return
             candles=closed(data) if step and step['mode']=='CANDLE' else []
-            if sequence.done:self._complete(data);return
+            if sequence.done:
+                if self._confirmation_ready(data):self._complete(data)
+                return
             complete=sequence.observe(data['bid'],data['quote_time'],candles)
             for event in sequence.events:
                 run['observations'].append(dict(copy.deepcopy(event),observed_at=int(self.clock()*1000),quote_time=data['quote_time'],bid=data['bid'],candle=candles[-1] if candles else None))
@@ -271,7 +273,8 @@ class ConditionRun:
                 else:
                     rule=sequence.rows[event['index']];level=event.get('structure',{}).get('level',rule.get('level') if rule['rule'] not in ('ZONE_ENTER','ZONE_TOUCH','CLOSE_IN_ZONE') else f'{rule["low"]}–{rule["high"]}')
                     self._event('Step passed',f'Step {event["index"]+1}/{len(sequence.rows)}: {rule["rule"]} {level} · Bid {data["bid"]}.')
-            if complete:self._complete(data)
+            if complete:
+                if self._confirmation_ready(data):self._complete(data)
             else:run['message']=f'Server monitoring · {"AUTO ORDER ARMED" if run["action"]=="AUTO" else "Review preparation" if run["action"]=="REVIEW" else "Alerts only"} · {run["symbol"]} · step {sequence.index+1} of {len(sequence.rows)}'+(' · '+sequence.structure_state['status'] if sequence.structure_state else '')+'. Settings frozen at Start; tracked swing levels may update. Continues while the browser is hidden.'
         except MonitorInterruption as error:self._interrupt(error)
         except EntryQualitySkipped as error:
@@ -281,6 +284,32 @@ class ConditionRun:
             self._check_invalidation(dict(bid=error.bid,quote_time=self.clock()))
         except Exception as error:
             self._finish(('Finished: ' if run['attempted'] else 'Stopped: ')+str(error)+' No automatic retry. Check MT5 before starting again.','finished' if run['attempted'] else 'stopped')
+
+    def _confirmation_ready(self,data):
+        run=self.run;plan=run['settings'].get('autoPlan') or {}
+        if run['action']=='ALERT' or not plan.get('enabled') or plan.get('entry')!='CONFIRM':return True
+        state=run.get('retest_confirmation')
+        if state is None:
+            direction=1 if run['settings']['ticket']['side']=='BUY' else -1
+            signal=next((e for e in reversed(run['observations']) if e.get('structure',{}).get('direction')==direction),None)
+            if not signal:raise EntryQualitySkipped('Retest confirmation requires an observed matching BOS/MS break.')
+            frame=run['rows'][signal['index']]['timeframe'];history=closed(self._market(frame))
+            if not history:raise EntryQualitySkipped('Confirmation candle history unavailable.')
+            state=dict(level=signal['structure']['level'],direction=direction,timeframe=frame,last_candle=history[-1]['time'],expires=self.clock()+plan['expiry']*60,touched=False)
+            run['retest_confirmation']=state;self._event('Waiting retest','Conditions passed; waiting for a future retest and rejection close.')
+        if self.clock()>=state['expires']:raise EntryQualitySkipped('Retest confirmation expired without entry.')
+        history=closed(self._market(state['timeframe']));newer=[bar for bar in history if bar['time']>state['last_candle']]
+        if len(newer)>1:raise EntryQualitySkipped('Confirmation candles were missed. Start again; no signal replay.')
+        if newer:
+            bar=newer[0];state['last_candle']=bar['time'];buy=state['direction']==1
+            if (bar['low']<=state['level'] if buy else bar['high']>=state['level']):state['touched']=True
+            rejected=bar['close']>state['level'] and bar['close']>bar['open'] if buy else bar['close']<state['level'] and bar['close']<bar['open']
+            if state['touched'] and rejected:
+                run['observations'].append(dict(type='retest_confirmed',observed_at=int(self.clock()*1000),level=state['level'],candle=bar,bid=data['bid']))
+                run['observations']=run['observations'][-100:]
+                state['message']='Retest confirmed; preparing market entry.';self._event('Retest confirmed',state['message']);return True
+        state['message']=f"Waiting for {state['timeframe']} {'bullish' if state['direction']==1 else 'bearish'} rejection close {'above' if state['direction']==1 else 'below'} {state['level']} after retest. {'Retest observed.' if state['touched'] else 'Retest not yet observed.'}"
+        run['message']=state['message'];return False
 
     def _complete(self,data):
         run=self.run

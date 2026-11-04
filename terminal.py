@@ -110,6 +110,24 @@ class Terminal:
                                  price=o.price_open,sl=o.sl,tp=o.tp) for o in orders],
                     positions=[{k: str(getattr(p,k)) if k == 'ticket' else getattr(p,k) for k in fields} for p in positions])
 
+    def exposure(self, body=None):
+        mt,account=self.connection();positions=mt.positions_get();orders=mt.orders_get()
+        if positions is None or orders is None:raise ValueError('Cannot read account exposure from MT5.')
+        if not math.isfinite(account.equity):raise ValueError('Account equity is unavailable.')
+        total=0.;unknown=[];items=[]
+        for kind,rows in (('position',positions),('pending',orders)):
+            for row in rows:
+                ticket=str(row.ticket);sl=float(row.sl or 0);volume=float(row.volume if kind=='position' else row.volume_current)
+                side=0 if row.type in (0,2,4,6) else 1
+                tick=mt.symbol_info_tick(row.symbol) if kind=='position' else None
+                entry=(tick.bid if side==0 else tick.ask) if tick else (getattr(row,'price_stoplimit',0) if row.type in (6,7) else row.price_open)
+                if not all(math.isfinite(value) for value in (sl,entry,volume)) or sl<=0 or entry<=0 or volume<=0 or kind=='position' and (tick is None or not 0<=time.time()-tick.time<=30):unknown.append(dict(ticket=ticket,symbol=row.symbol,kind=kind,reason='Missing stop or quote'));continue
+                loss=mt.order_calc_profit(side,row.symbol,volume,entry,sl)
+                if loss is None or not math.isfinite(loss):unknown.append(dict(ticket=ticket,symbol=row.symbol,kind=kind,reason='Broker calculation unavailable'));continue
+                risk=max(0.,-float(loss));total+=risk;items.append(dict(ticket=ticket,symbol=row.symbol,kind=kind,risk=risk))
+        self.bridge.check()
+        return dict(account=str(account.login),server=account.server,currency=account.currency,equity=account.equity,risk=total,risk_percent=total/account.equity*100 if account.equity>0 else None,unknown=unknown,items=items,checked_at=time.time(),note='Open positions: additional loss from current quote to SL. Pending: entry to SL. Gross estimate; gaps, costs and slippage excluded. No hedge offsets assumed.')
+
     def calculate_condition_plan(self, body):
         """Calculate condition prices and sizing without order checks or review tokens."""
         mt,account=self.connection(trading=True)
@@ -134,7 +152,7 @@ class Terminal:
         if not sensitivity.is_integer() or settings.get('timeframe') not in ('M1','M5','M15','M30','H1','H4','D1'):
             raise ValueError('Choose a valid swing timeframe and sensitivity.')
         entry_mode=settings.get('entry')
-        if entry_mode not in ('MARKET','RETEST'):raise ValueError('Choose market or retest limit entry.')
+        if entry_mode not in ('MARKET','RETEST','CONFIRM'):raise ValueError('Choose market or retest limit entry.')
         if not all(math.isfinite(v) and v>0 for v in (info.trade_tick_size,info.point,info.volume_min,info.volume_step,info.volume_max,account.equity)):
             raise ValueError('Broker contract or equity is unavailable.')
         unit=info.trade_tick_size;direction=1 if side=='BUY' else -1
@@ -153,11 +171,11 @@ class Terminal:
             if not all(math.isfinite(v) for v in (low,high,stamp)) or not 0<low<=high or not 0<stamp<tick.time:raise ValueError('Invalid completed signal candle.')
             anchor=min(anchor,low) if side=='BUY' else max(anchor,high)
         if not isinstance(settings.get('hold_breakout',False),bool):raise ValueError('Invalid breakout holding setting.')
-        breakout={'level':body.get('retest_level')} if settings.get('hold_breakout') and entry_mode=='MARKET' else None
+        breakout={'level':body.get('retest_level')} if (settings.get('hold_breakout') or entry_mode=='CONFIRM') and entry_mode in ('MARKET','CONFIRM') else None
         check_breakout(breakout,side,tick)
         stop=rounded(anchor-direction*buffer*unit,side=='SELL')
         expires_at=None
-        if entry_mode=='MARKET':entry=tick.ask if side=='BUY' else tick.bid
+        if entry_mode in ('MARKET','CONFIRM'):entry=tick.ask if side=='BUY' else tick.bid
         else:
             try:entry=rounded(float(body.get('retest_level')),side=='SELL')
             except (ValueError,TypeError,OverflowError):raise ValueError('A matching BOS/MS retest level is unavailable.')
@@ -168,7 +186,7 @@ class Terminal:
             if not expiry.is_integer():raise ValueError('Expiry must be whole minutes.')
             if not int(getattr(info,'expiration_mode',0))&4:raise ValueError('Broker does not support specified pending-order expiry for this symbol.')
             expires_at=int(time.time()+expiry*60)
-        adverse=entry+direction*20*info.point if entry_mode=='MARKET' else entry
+        adverse=entry+direction*20*info.point if entry_mode in ('MARKET','CONFIRM') else entry
         distance=direction*(adverse-stop)
         if stop<=0 or distance<=0 or direction*(entry-stop)<=0:raise ValueError('Confirmed swing and buffer do not give a valid stop beyond entry.')
         target=rounded(adverse+direction*multiple*distance,side=='BUY')
@@ -192,7 +210,7 @@ class Terminal:
         setup={**(body.get('condition_setup') or {}),'automatic_plan':calculation}
         planned={**body,'condition_entry':True,'condition_risk_auto':True,'condition_risk_percent':risk_percent,
                  'condition_risk_budget':budget,'condition_breakout':breakout,'condition_min_rr':multiple,'condition_setup':setup,
-                 'order_kind':'MARKET' if entry_mode=='MARKET' else 'LIMIT','price':entry,'sl':stop,'tp':target,'volume':volume}
+                 'order_kind':'MARKET' if entry_mode in ('MARKET','CONFIRM') else 'LIMIT','price':entry,'sl':stop,'tp':target,'volume':volume}
         if expires_at:planned['condition_expires_at']=expires_at
         planned=json.loads(json.dumps(planned,allow_nan=False))
         return planned,calculation

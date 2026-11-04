@@ -15,6 +15,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  await page.locator('#terminal-builder-open').click();await page.locator('#terminal-setup-builder').waitFor();
  assert.ok((await page.locator('#terminal-setup-builder').boundingBox()).width>900,'builder uses available desktop width');
  assert.equal(await page.locator('#terminal-builder-step-conditions').getAttribute('aria-current'),'step');
+ await page.waitForFunction(()=>document.querySelector('#terminal-builder-exposure').textContent.includes('40.00 USD'));assert.match(await page.locator('#terminal-builder-exposure').textContent(),/total is incomplete/);
  await page.locator('#terminal-condition-starter-risk').fill('0.75');await page.locator('#terminal-condition-starter-load').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);
  assert.equal(await page.locator('.terminal-condition-row [data-field=rule]').inputValue(),'MS_UP');
  const chartFrame=await page.locator('#terminal-timeframe').inputValue();
@@ -30,6 +31,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  assert.equal(await page.locator('#terminal-auto-plan-risk').inputValue(),'0.75');assert.equal(await page.locator('#terminal-auto-plan-sensitivity').isVisible(),false);
  await page.locator('#terminal-builder-mode').click();assert.equal(await page.locator('#terminal-auto-plan-sensitivity').isVisible(),true);await page.locator('#terminal-auto-plan-sensitivity').fill('3');
  await page.locator('#terminal-builder-mode').click();assert.equal(await page.locator('#terminal-auto-plan-sensitivity').inputValue(),'3','simple mode keeps advanced values');
+ await page.locator('#terminal-auto-plan-entry').selectOption('CONFIRM');assert.equal(await page.locator('#terminal-auto-plan-expiry').isEnabled(),true);assert.equal(await page.locator('#terminal-auto-plan-hold_breakout').isChecked(),true);await page.locator('#terminal-auto-plan-entry').selectOption('MARKET');
  await page.locator('#terminal-auto-plan-stop_basis').selectOption('SIGNAL');await page.locator('#terminal-auto-plan-hold_breakout').check();
  await page.locator('#terminal-setup-builder').screenshot({path:path.join(root,'work/setup-builder-entry.png')});
  await page.locator('#terminal-builder-close').click();assert.equal(await page.locator('#terminal-auto-plan-risk').inputValue(),'0.75');assert.equal((await post('test/feed')).sent,0);

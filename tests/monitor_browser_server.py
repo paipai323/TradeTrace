@@ -16,14 +16,15 @@ from entry_quality import check_quality
 
 class FakeTerminal:
     def __init__(self):
-        self.fixture_bars=None;self.quote_age=0;self.bid=1.103;self.account='123';self.sent=[];self.previews={};self.failure=None;self.preview_delay=0;self.preview_started=threading.Event()
+        self.fixture_orders=[];self.fixture_bars=None;self.quote_age=0;self.bid=1.103;self.account='123';self.sent=[];self.previews={};self.failure=None;self.preview_delay=0;self.preview_started=threading.Event()
     def connection(self,trading=False):return None,Row(login=self.account,server='Test-Demo')
     def symbols(self):return dict(symbols=['EURUSD','GBPUSD'],visible=['EURUSD'],account=self.account,server='Test-Demo',currency='USD',demo=True)
     def market(self,body):
         if self.failure:raise ValueError(self.failure)
         bars=self.fixture_bars if self.fixture_bars is not None else [[int(time.time()//300)*300000-(299-i)*300000,1.1+i*.00001,1.1003+i*.00001,1.0997+i*.00001,1.1001+i*.00001,100] for i in range(300)]
         return dict(bars=bars,bid=self.bid,ask=self.bid+.0001,quote_time=time.time()-self.quote_age,digits=5,tick_size=.00001,point=.00001,stops_distance=.0001,
-                    volume_min=.01,volume_max=10,volume_step=.01,balance=10000,equity=10000,margin_free=10000,currency='USD',account=self.account,server='Test-Demo',demo=True,trading_allowed=True,positions=[],orders=[])
+                    volume_min=.01,volume_max=10,volume_step=.01,balance=10000,equity=10000,margin_free=10000,currency='USD',account=self.account,server='Test-Demo',demo=True,trading_allowed=True,positions=[],orders=self.fixture_orders)
+    def exposure(self,body=None):return dict(account=self.account,server='Test-Demo',currency='USD',equity=10000,risk=40,risk_percent=.4,unknown=[dict(ticket='unknown')],items=[dict(kind='position',risk=25),dict(kind='pending',risk=15)],checked_at=time.time())
     def quotes(self,body):return dict(quotes={s:dict(bid=self.bid,ask=self.bid+.0001,time=time.time()) for s in body['symbols']})
     def closed(self,body):return dict(positions=[])
     def estimate(self,body):return dict(account=self.account,server='Test-Demo',currency='USD',sl=-10,tp=20)
@@ -70,6 +71,7 @@ class Handler(server.Handler):
             if 'quote_age' in body:terminal.quote_age=body['quote_age']
             if 'poll_gap' in body and server.condition_monitor.run:
                 run=server.condition_monitor.run;run['last_poll']=run['last_observed_at']=run['last_quote_time']=time.time()-body['poll_gap']
+            if 'orders' in body:terminal.fixture_orders=body['orders']
             if 'bid' in body:terminal.bid=body['bid']
             if 'account' in body:terminal.account=body['account']
             if 'failure' in body:terminal.failure=body['failure']

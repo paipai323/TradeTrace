@@ -24,6 +24,7 @@ def estimate_run(runner):
               condition_entry=True,condition_invalidation=copy.deepcopy(run['invalidation']),expected_account=run['account'],expected_server=run['server'],condition_risk_auto=settings['sizing']=='AUTO')
     try:
         if plan.get('enabled'):
+            if plan.get('entry')=='CONFIRM':raise EstimateUnavailable('Retest confirmation market entry needs a future rejection close; its execution price is not known yet.')
             history=runner._market(plan['timeframe']);tracker=Structure(plan['sensitivity'])
             for bar in history['bars'][:-1]:tracker.push(dict(time=bar[0]/1000,open=bar[1],high=bar[2],low=bar[3],close=bar[4]))
             swing=(tracker.lows if body['side']=='BUY' else tracker.highs)

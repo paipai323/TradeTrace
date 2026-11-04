@@ -138,6 +138,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = terminal.quotes(body)
             elif self.path == '/api/terminal/market':
                 result = terminal.market(body)
+            elif self.path == '/api/terminal/exposure':
+                result = terminal.exposure(body)
             elif self.path == '/api/terminal/plan':
                 result = terminal.plan(body)
             elif self.path == '/api/terminal/estimate':

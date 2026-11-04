@@ -3,12 +3,31 @@ import base64
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import sqlite3
 import uuid
 
 
 CHECKS = {'planned', 'risk', 'entry', 'exit'}
+
+
+def setup_performance(trades, entries):
+    linked={str(trade['id']):trade for trade in trades};seen=set();groups={}
+    for item in entries:
+        pid=str(item.get('position') or '')
+        if pid in seen or pid not in linked:continue
+        trade=linked[pid];setup=item.get('setup') or {};result=item.get('result') or {}
+        if str(trade.get('entry_order'))!=str(result.get('order')):continue
+        seen.add(pid);plan=setup.get('automatic_plan') or {};settings=setup.get('settings') or {};mode=(settings.get('autoPlan') or {}).get('entry') or ('RETEST' if result.get('operation')=='pending' else 'MARKET')
+        family=next(('BOS' if row.get('rule','').startswith('BOS') else 'MS' for row in setup.get('rows',[]) if row.get('rule','').startswith(('BOS','MS'))),'Other')
+        key=(family,mode);group=groups.setdefault(key,dict(family=family,entry=mode,trades=0,wins=0,net=0.,r_count=0,total_r=0.))
+        net=float(trade.get('net',0));group['trades']+=1;group['wins']+=net>0;group['net']+=net
+        risk=plan.get('modeled_loss')
+        if isinstance(risk,(float,int)) and math.isfinite(risk) and risk>0:group['r_count']+=1;group['total_r']+=net/risk
+    for group in groups.values():group.update(win_rate=group['wins']/group['trades']*100,average_r=group['total_r']/group['r_count'] if group['r_count'] else None)
+    return sorted(groups.values(),key=lambda group:(group['family'],group['entry']))
+
 
 
 class Journal:
@@ -77,7 +96,8 @@ class Journal:
             trades.sort(key=lambda t:t['end'], reverse=True)
             entries = [dict(id=row['id'], position=row['position'], created=row['created'], **json.loads(row['payload']))
                        for row in con.execute('SELECT * FROM condition_entries WHERE account=? ORDER BY created DESC LIMIT 200', (account,))]
-        return dict(account=account, accounts=accounts, trades=trades, condition_entries=entries)
+            performance_entries=[dict(position=row['position'],**json.loads(row['payload'])) for row in con.execute('SELECT e.position,e.payload FROM condition_entries e JOIN trades t ON t.account=e.account AND t.position=e.position WHERE e.account=? ORDER BY e.created DESC',(account,))]
+        return dict(account=account, accounts=accounts, trades=trades, condition_entries=entries,setup_performance=setup_performance(trades,performance_entries))
 
     def entry(self, account, position):
         with self.db() as con:

@@ -230,3 +230,7 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 .terminal-monitor-workspace .terminal-monitor-pending-info{grid-column:1/-1;padding:9px 12px;background:#33301e;border-left:3px solid #e5c16d;color:#f6dca0;line-height:1.6;font-size:13px}
 
 .terminal-history-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:end;padding:12px;background:#172737;border:1px solid #355066;border-radius:6px;margin:12px 0}.terminal-history-tools[hidden]{display:none}.terminal-history-tools label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:#bdd0e2}.terminal-history-tools input,.terminal-history-tools select{padding:8px;max-width:100%;box-sizing:border-box}.terminal-history-tools label:first-child{flex:1;min-width:190px}.terminal-history-pages{display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap;font-size:12px;color:#a6bed3}.terminal-history-pages>span{flex:1}.terminal-monitor-history-date{grid-column:1/-1;color:#9bb1c9;font-size:11px}
+
+.terminal-builder-exposure{padding:10px 24px;background:#192536;border-bottom:1px solid #3a526a;flex-shrink:0;font-size:12px}.terminal-builder-exposure p{margin:5px 0;line-height:1.5}#terminal-broker-focus-info{margin:0;padding:6px 12px;color:#ffe1a0}#terminal-setup-builder .terminal-builder-exposure{max-height:150px;overflow:auto}
+
+.terminal-builder-exposure>summary{cursor:pointer;font-size:12px;color:#c9e5f4}#terminal-setup-builder .terminal-builder-exposure:not([open]){overflow:visible;max-height:none}.terminal-builder-exposure[open]{max-height:180px}

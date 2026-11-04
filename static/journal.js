@@ -129,7 +129,14 @@ function filteredTrades(){
     return journalView!=='calendar'||journalDate(trade.end).slice(0,7)===journalMonth;
   });
 }
+function renderSetupPerformance(){
+  const host=$('journal-setup-performance-table'),rows=journalModel.setup_performance||[];host.replaceChildren();
+  if(!rows.length){host.append(element('p','No linked closed setup trades yet.'));return;}
+  const table=element('table'),head=element('tr');for(const title of ['Setup','Entry','Trades','Win rate','Net P/L','Total R','Avg R','R sample'])head.append(element('th',title));const thead=element('thead');thead.append(head);table.append(thead);const body=element('tbody');
+  for(const row of rows){const tr=element('tr');for(const value of [row.family,({MARKET:'Market',RETEST:'Retest limit',CONFIRM:'Retest + confirmation'})[row.entry]||row.entry,row.trades,row.win_rate.toFixed(1)+'%',money(row.net,journalCurrency()),row.r_count?row.total_r.toFixed(2):'—',row.average_r!==null?row.average_r.toFixed(2):'—',row.r_count+' / '+row.trades])tr.append(element('td',String(value)));body.append(tr);}table.append(body);host.append(table);
+}
 function renderJournal(){
+  renderSetupPerformance();
   const trades=filteredTrades(), wins=trades.filter(t=>t.net>0).length, losses=trades.filter(t=>t.net<0);
   const net=trades.reduce((sum,t)=>sum+t.net,0), grossWin=trades.reduce((sum,t)=>sum+Math.max(0,t.net),0), grossLoss=-losses.reduce((sum,t)=>sum+t.net,0);
   if(journalModel.accounts.length)$('journal-context').textContent=(journalView==='calendar'?'Month '+journalMonth:'Saved trade history')+' · '+journalCurrency()+' · exit dates in '+$('journal-timezone').value+' · filters apply to these statistics. Accounts stay separate.';
@@ -377,7 +384,7 @@ function conditionEntryCard(item){
   const timeline=element('ol');timeline.className='journal-setup-timeline';
   const addEvent=(title,time,description)=>{const row=element('li');row.append(element('strong',title),element('time',when(time)));if(description)row.append(element('span',description));timeline.append(row);};
   addEvent('Monitoring started',setup.started,setup.action==='AUTO'?'Automatic entry armed':setup.action==='REVIEW'?'Order required manual confirmation':'Condition entry');
-  for(const event of observations)addEvent(event.type==='reset'?'Conditions reset':'Step '+(event.index+1)+' passed',event.observed_at,event.type==='reset'?event.reason:event.structure?`${event.structure.type} confirmed at ${number(event.structure.level)} · Bid ${number(event.bid)}`:'Bid '+number(event.bid));
+  for(const event of observations)addEvent(event.type==='reset'?'Conditions reset':event.type==='retest_confirmed'?'Retest confirmed':'Step '+(event.index+1)+' passed',event.observed_at,event.type==='reset'?event.reason:event.structure?`${event.structure.type} confirmed at ${number(event.structure.level)} · Bid ${number(event.bid)}`:'Bid '+number(event.bid));
   addEvent(status,item.created,'Order '+(result.order||'not recorded'));card.append(timeline);
   const technical=element('details');technical.className='journal-setup-technical';technical.append(element('summary','Broker & technical details'));
   const info=element('dl');info.className='journal-setup-technical-fields';
