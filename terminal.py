@@ -1,4 +1,4 @@
-from entry_quality import check_quality
+from entry_quality import check_quality, EntryQualitySkipped
 """Local market workspace and single-use market order previews."""
 import hashlib
 import json
@@ -7,6 +7,16 @@ import secrets
 import time
 from datetime import datetime, timezone, timedelta
 from timeframes import NATIVE, interval, aggregate
+
+
+def check_breakout(guard,side,tick):
+    if not guard:return
+    try:level=float(guard['level'])
+    except (KeyError,TypeError,ValueError):raise ValueError('Matching breakout level unavailable.')
+    if not math.isfinite(level) or level<=0:raise ValueError('Invalid breakout level.')
+    quote=tick.bid if side=='BUY' else tick.ask
+    if not (quote>level if side=='BUY' else quote<level):
+        raise EntryQualitySkipped(f'Breakout no longer holding: {"Bid" if side=="BUY" else "Ask"} {quote} must remain {"above" if side=="BUY" else "below"} {level}. No order sent.')
 
 
 class ConditionInvalidated(ValueError):
@@ -134,6 +144,17 @@ class Terminal:
         except (KeyError,ValueError,TypeError):raise ValueError('A confirmed stop swing is unavailable.')
         if not all(math.isfinite(v) for v in (anchor,confirmed,swing_time)) or anchor<=0 or not swing_time<confirmed<=tick.time:
             raise ValueError('A valid confirmed stop swing is required.')
+        basis=settings.get('stop_basis','SWING')
+        if basis not in ('SWING','SIGNAL'):raise ValueError('Invalid stop basis.')
+        signal=body.get('signal_candle') or {}
+        if basis=='SIGNAL':
+            try:low=float(signal['low']);high=float(signal['high']);stamp=float(signal['time'])
+            except (KeyError,TypeError,ValueError):raise ValueError('A completed matching BOS/MS signal candle is required for the stop.')
+            if not all(math.isfinite(v) for v in (low,high,stamp)) or not 0<low<=high or not 0<stamp<tick.time:raise ValueError('Invalid completed signal candle.')
+            anchor=min(anchor,low) if side=='BUY' else max(anchor,high)
+        if not isinstance(settings.get('hold_breakout',False),bool):raise ValueError('Invalid breakout holding setting.')
+        breakout={'level':body.get('retest_level')} if settings.get('hold_breakout') and entry_mode=='MARKET' else None
+        check_breakout(breakout,side,tick)
         stop=rounded(anchor-direction*buffer*unit,side=='SELL')
         expires_at=None
         if entry_mode=='MARKET':entry=tick.ask if side=='BUY' else tick.bid
@@ -167,10 +188,10 @@ class Terminal:
         if reward is None or not math.isfinite(reward) or reward<=0:raise ValueError('Broker reward calculation unavailable.')
         calculation=dict(entry=entry,modeled_entry=adverse,sl=stop,tp=target,volume=volume,risk_percent=risk_percent,
                          budget=budget,modeled_loss=modeled,modeled_reward=reward,rr=multiple,currency=account.currency,
-                         stop_swing=dict(swing),buffer_ticks=buffer,expires_at=expires_at)
+                         stop_swing=dict(swing),stop_basis=basis,stop_anchor=anchor,signal_candle=dict(signal) if basis=='SIGNAL' else None,hold_breakout=bool(breakout),breakout_level=body.get('retest_level') if breakout else None,buffer_ticks=buffer,expires_at=expires_at)
         setup={**(body.get('condition_setup') or {}),'automatic_plan':calculation}
         planned={**body,'condition_entry':True,'condition_risk_auto':True,'condition_risk_percent':risk_percent,
-                 'condition_risk_budget':budget,'condition_min_rr':multiple,'condition_setup':setup,
+                 'condition_risk_budget':budget,'condition_breakout':breakout,'condition_min_rr':multiple,'condition_setup':setup,
                  'order_kind':'MARKET' if entry_mode=='MARKET' else 'LIMIT','price':entry,'sl':stop,'tp':target,'volume':volume}
         if expires_at:planned['condition_expires_at']=expires_at
         planned=json.loads(json.dumps(planned,allow_nan=False))
@@ -254,6 +275,7 @@ class Terminal:
         mt, account = self.connection(trading=True)
         symbol, side = str(body.get('symbol', '')), body.get('side')
         info, tick = mt.symbol_info(symbol), mt.symbol_info_tick(symbol)
+        if body.get('condition_breakout') and body.get('order_kind','MARKET')=='MARKET' and tick:check_breakout(body['condition_breakout'],body.get('side'),tick)
         if info is None or tick is None or side not in ('BUY', 'SELL'):
             raise ValueError('Select a valid symbol and side.')
         if time.time() - tick.time > 30 or tick.time > time.time() + 5 or not (0 < tick.bid <= tick.ask):
@@ -489,7 +511,7 @@ class Terminal:
         operation=preview['body'].get('operation') or ('pending' if preview['body'].get('order_kind','MARKET')!='MARKET' else 'open')
         response = dict(retcode=result.retcode, comment=result.comment, order=str(result.order), deal=str(result.deal),
                     operation=operation,remaining_volume=remaining,
-                    price=result.price, volume=result.volume,
+                    price=result.price, volume=result.volume, requested_price=request.get('price'), order_type=request.get('type'),
                     message='Check MT5 positions/history for final execution status. Do not automatically retry.')
         if preview['body'].get('condition_entry') and result.retcode in (10008,10009,10010):
             try:

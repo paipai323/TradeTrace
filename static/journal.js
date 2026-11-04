@@ -351,23 +351,47 @@ window.addEventListener('DOMContentLoaded',()=>{
 });
 
 function conditionEntryCard(item){
-  const card=element('details'),result=item.result||{},request=item.request||{},setup=item.setup||{};
+  const card=element('details'),result=item.result||{},request=item.request||{},setup=item.setup||{},plan=setup.automatic_plan;
+  card.className='journal-setup-card';
+  const number=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value).toLocaleString(undefined,{maximumFractionDigits:8}):'Not recorded';
+  const money=value=>Number.isFinite(Number(value))&&value!==null&&value!==undefined?Number(value).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'Not recorded';
+  const when=value=>value?new Date(value).toLocaleString():'Not recorded';
   const side=setup.settings?.ticket?.side||([0,2,4].includes(request.type)?'BUY':'SELL'),kind=({2:'LIMIT',3:'LIMIT',4:'STOP',5:'STOP'})[request.type]||'MARKET';
-  const status=result.operation==='pending'?'Pending order accepted':Number(result.deal)>0?'Execution reported':'Order accepted; check MT5';
-  card.append(element('summary',`${item.demo?'DEMO':'LIVE'} · ${side} ${kind} ${request.symbol||'Unknown symbol'} · ${status} · #${result.order} · ${new Date(item.created).toLocaleString()}`));
-  card.append(element('p',`Order ${result.order} · deal ${result.deal} · broker ${result.retcode}: ${result.comment}. Requested ${request.volume??'?'} lots at ${request.price??'?'}. Reported volume ${result.volume}, price ${result.price}. Requested SL ${request.sl||'none'}, TP ${request.tp||'none'}.`));
-  card.append(element('p',`${setup.action==='AUTO'?'Automatic entry':setup.action==='REVIEW'?'Conditions followed by manual confirmation':'Condition entry'} · ${setup.settings?.autoPlan?.enabled?setup.settings.autoPlan.risk+'% automatic plan':setup.settings?.sizing==='AUTO'?'2% equity':'Ticket lots'} · timeout ${setup.settings?.timeout??'?'} min · quote-gap reset ${setup.settings?.gap??'?'} s · started ${setup.started?new Date(setup.started).toLocaleString():'not recorded'}.`));
-  if(setup.entry_quality_result){const q=setup.entry_quality_result,parts=[];if(q.distance!==undefined)parts.push('distance '+Number(q.distance).toFixed(5)+' / max '+q.max_distance);if(q.rr!==undefined)parts.push('RR 1:'+Number(q.rr).toFixed(2)+' / minimum 1:'+q.min_rr);card.append(element('p',`Entry quality passed: ${parts.join(' · ')}. Modeled entry ${q.modeled_entry}; price-based, excluding costs.`));}
-  if(setup.invalidation?.enabled){const g=setup.invalidation;card.append(element('p',`Applied invalidation: Bid ${g.direction==='BELOW'?'at/below':'at/above'} ${g.level}, frozen at Start${g.timeframe?' from '+g.timeframe+' swing':''}. This guarded the waiting setup, not the opened position.`));}
-  if(setup.automatic_plan){const a=setup.automatic_plan;card.append(element('p',`Automatic plan · ${a.risk_percent}% equity · budget ${a.budget} ${a.currency} · modeled loss ${a.modeled_loss}, reward ${a.modeled_reward} · ${a.rr}R · stop swing ${a.stop_swing?.price} · buffer ${a.buffer_ticks} ticks${a.expires_at?' · expiry '+new Date(a.expires_at*1000).toLocaleString():''}. Costs/slippage excluded.`));}
-  const list=element('ol');for(const row of setup.rows||[]){const label=window.TerminalConditions?.rules[row.rule]||row.rule;list.append(element('li',`${label} · ${row.mode==='LIVE'?'Live Bid':row.timeframe+' closed candle'} · ${window.TerminalConditions?.structure(row.rule)?row.sensitivity+' swing candles each side':window.TerminalConditions?.zone(row.rule)?row.low+'–'+row.high:row.level}`));}card.append(list);
-  if(!(setup.rows||[]).length)card.append(element('p','No conditions recorded (an empty sequence acts immediately).'));
-  const observations=element('details');observations.append(element('summary',`Observed events · ${(setup.observations||[]).length}`));
-  for(const event of setup.observations||[])observations.append(element('p',`${new Date(event.observed_at).toLocaleString()} · ${event.type==='reset'?'Reset: '+event.reason:'Step '+(event.index+1)+' passed'}${event.structure?' · '+event.structure.type+' at '+event.structure.level+' · swing '+new Date(event.structure.swing_time*1000).toLocaleString():''} · Bid ${event.bid}${event.candle?' · completed candle '+new Date(event.candle.time*1000).toLocaleString()+' O '+event.candle.open+' H '+event.candle.high+' L '+event.candle.low+' C '+event.candle.close:''}`));card.append(observations);
-  if(item.position){const button=element('button',`Open closed trade #${item.position}`);button.type='button';button.onclick=()=>openJournalTrade(item.position);card.append(button);}
+  const accepted=[10008,10009,10010].includes(result.retcode),filled=accepted&&Number(result.deal)>0;
+  const status=!accepted?'Broker result: '+(result.comment||result.retcode||'unknown'):filled?'Entry execution reported':result.operation==='pending'?'Pending order accepted · fill not confirmed':'Order accepted · check MT5';
+  const summary=element('summary'),heading=element('span');heading.className='journal-setup-heading';heading.append(element('strong',`${request.symbol||'Unknown symbol'} · ${side} ${kind}`),element('span',`${item.demo?'DEMO':'LIVE'} · ${status}`));summary.append(heading);card.append(summary);
+  if(setup.name)card.append(element('h4',setup.name));
+  const metrics=element('dl');metrics.className='journal-setup-metrics';
+  const metric=(label,value)=>{const box=element('div');box.append(element('dt',label),element('dd',value));metrics.append(box);};
+  metric(filled?'Reported entry':'Requested entry',number(filled?result.price:request.price));metric('Stop loss',request.sl?number(request.sl):'Not set');metric('Take profit',request.tp?number(request.tp):'Not set');metric('Lots',number(filled?result.volume:request.volume));
+  metric('Equity risk',plan?number(plan.risk_percent)+'%':setup.settings?.autoPlan?.enabled?number(setup.settings.autoPlan.risk)+'%':setup.settings?.sizing==='AUTO'?'2%':'Fixed lots');
+  if(plan){metric('Modeled risk',money(plan.modeled_loss)+' '+(plan.currency||''));metric('Modeled reward',money(plan.modeled_reward)+' '+(plan.currency||''));metric('Planned reward / risk',number(plan.rr)+'R');}
+  card.append(metrics);
+  card.append(element('h4',filled?'Why this entry opened':'Entry conditions'));
+  const list=element('ol');list.className='journal-setup-conditions';
+  for(const row of setup.rows||[]){const label=window.TerminalConditions?.rules[row.rule]||row.rule;const li=element('li');li.append(element('strong',label),element('span',row.mode==='LIVE'?'Live Bid':row.timeframe+' candle close'));if(window.TerminalConditions?.structure(row.rule))li.append(element('span',`${row.sensitivity} candle${row.sensitivity===1?'':'s'} each side confirm the swing`));else li.append(element('span',window.TerminalConditions?.zone(row.rule)?number(row.low)+' – '+number(row.high):'Level '+number(row.level)));list.append(li);}card.append(list);
+  if(!(setup.rows||[]).length)card.append(element('p','No conditions recorded. An empty sequence acts immediately.'));
+  if(setup.invalidation?.enabled){const g=setup.invalidation;const note=element('p',`Setup cancellation: Bid ${g.direction==='BELOW'?'at or below':'at or above'} ${number(g.level)}. Frozen when monitoring started; this did not protect the open position.`);note.className='journal-setup-note';card.append(note);}
+  const observations=setup.observations||[];
+  card.append(element('h4','Entry timeline'));
+  const timeline=element('ol');timeline.className='journal-setup-timeline';
+  const addEvent=(title,time,description)=>{const row=element('li');row.append(element('strong',title),element('time',when(time)));if(description)row.append(element('span',description));timeline.append(row);};
+  addEvent('Monitoring started',setup.started,setup.action==='AUTO'?'Automatic entry armed':setup.action==='REVIEW'?'Order required manual confirmation':'Condition entry');
+  for(const event of observations)addEvent(event.type==='reset'?'Conditions reset':'Step '+(event.index+1)+' passed',event.observed_at,event.type==='reset'?event.reason:event.structure?`${event.structure.type} confirmed at ${number(event.structure.level)} · Bid ${number(event.bid)}`:'Bid '+number(event.bid));
+  addEvent(status,item.created,'Order '+(result.order||'not recorded'));card.append(timeline);
+  const technical=element('details');technical.className='journal-setup-technical';technical.append(element('summary','Broker & technical details'));
+  const info=element('dl');info.className='journal-setup-technical-fields';
+  for(const [label,value] of [['Order ID',result.order],['Deal ID',result.deal],['Broker response',`${result.retcode??'Unknown'} · ${result.comment||''}`],['Requested entry',number(request.price)],['Requested lots',number(request.volume)],['Reported entry',number(result.price)],['Reported lots',number(result.volume)],['Sequence timeout',`${setup.settings?.timeout??'Not recorded'} minutes`],['Reset after quote gap',`${setup.settings?.gap??'Not recorded'} seconds`]])info.append(element('dt',label),element('dd',String(value??'Not recorded')));
+  if(plan){info.append(element('dt','Stop placement'),element('dd',plan.stop_basis==='SIGNAL'?'Beyond confirmed swing and signal candle':'Confirmed swing'));if(plan.hold_breakout)info.append(element('dt','Breakout holding check'),element('dd','Required at order submission · level '+number(plan.breakout_level)));info.append(element('dt','Risk budget'),element('dd',money(plan.budget)+' '+(plan.currency||'')));info.append(element('dt','Stop swing / buffer'),element('dd',`${number(plan.stop_swing?.price)} / ${plan.buffer_ticks} broker ticks`));if(plan.expires_at)info.append(element('dt','Pending expiry'),element('dd',when(plan.expires_at*1000)));}
+  if(setup.entry_quality_result){const q=setup.entry_quality_result;info.append(element('dt','Entry quality passed'),element('dd',`Distance ${number(q.distance)} / maximum ${number(q.max_distance)} · RR ${number(q.rr)} / minimum ${number(q.min_rr)}`));}
+  technical.append(info);
+  for(const event of observations)if(event.candle){const c=event.candle;technical.append(element('p',`${when(c.time*1000)} · Open ${number(c.open)} · High ${number(c.high)} · Low ${number(c.low)} · Close ${number(c.close)}`));}
+  for(const event of observations)if(event.structure?.swing_time)technical.append(element('p','Confirmed swing time: '+when(event.structure.swing_time*1000)));
+  technical.append(element('p','Modeled risk and reward exclude costs and slippage. Entry execution is separate from the final trade result.'));card.append(technical);
+  if(item.position){const button=element('button',`Open linked trade #${item.position}`);button.type='button';button.onclick=()=>openJournalTrade(item.position);card.append(button);}
   return card;
 }
-function renderConditionEntryCards(node,entries){node.replaceChildren(...entries.map(conditionEntryCard));}
+function renderConditionEntryCards(node,entries){const cards=entries.map(conditionEntryCard);if(node.closest('#journal-trade-condition-entries'))for(const card of cards)card.open=true;node.replaceChildren(...cards);}
 function renderJournalConditionEntries(){
   const entries=journalModel.condition_entries||[];$('journal-condition-count').textContent=entries.length;
   renderConditionEntryCards($('journal-condition-entries'),entries);

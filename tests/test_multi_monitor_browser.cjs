@@ -21,6 +21,10 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  };
 
  const a=await setup(1.104,'AUTO','Buy breakout'),b=await setup(1.104,'AUTO','Buy confirmation');
+ let stopRequests=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/api/terminal/conditions/stop')stopRequests++;});
+ await page.locator('#terminal-setup-new').click();
+ assert.equal(await page.locator('#terminal-condition-action').inputValue(),'ALERT');assert.equal(await page.locator('.terminal-condition-row').count(),0);
+ assert.equal(stopRequests,0,'New setup never requests a stop');
  let state=(await post('test/feed')).state;assert.equal(state.runs.filter(r=>r.phase==='running').length,2);assert.equal(new Set(state.runs.map(r=>r.symbol)).size,1);
  await page.waitForFunction(()=>document.querySelector('#terminal-monitor-count').textContent==='2 active');
  await page.locator('#terminal-toggle-ticket').click();
@@ -117,6 +121,32 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  assert.equal(state.runs.find(r=>r.id===h).phase,'running','restart affects only the selected symbol/setup');
  await page.locator('#terminal-monitor-workspace-open').click();await page.locator('#terminal-monitor-stop-all').click();await waitState(s=>s.state.runs.every(r=>!['running','review','finishing'].includes(r.phase)));
  const noOrder=await post('terminal/conditions/outcome',{id:h});assert.equal(noOrder.outcome.state,'no_order');
+ const pendingSettings=structuredClone(state.runs.find(run=>run.id===h).settings);pendingSettings.action='AUTO';pendingSettings.ticket['order-kind']='PENDING';pendingSettings.ticket['order-price']='1.102';
+ const placed=await post('terminal/conditions/start',{request_id:'pending-visibility-test',multiple:true,symbol:'EURUSD',expected_account:'123',expected_server:'Test-Demo',name:'Pending setup',rows:[],settings:pendingSettings});
+ const pendingId=placed.run.id;await waitState(s=>s.state.runs.find(run=>run.id===pendingId)?.result?.operation==='pending');
+ await page.locator('#terminal-monitor-toolbar').click();await page.locator('[data-monitor-filter="active"]').click();
+ await page.waitForFunction(()=>document.querySelector('#terminal-monitor-toolbar').textContent.includes('1 pending'));
+ const pendingCard=page.locator(`[data-monitor-id="${pendingId}"]`);assert.match(await pendingCard.locator('.terminal-monitor-pending-info').textContent(),/1.102/);
+ await page.route('**/api/terminal/conditions/outcome',route=>route.fulfill({json:{outcome:{state:'open',message:'Position open',checked_at:Date.now()/1000+1,position:'999'}}}));
+ await pendingCard.getByRole('button',{name:'Check trade outcome',exact:true}).click();
+ await page.waitForFunction(()=>!document.querySelector('#terminal-monitor-toolbar').textContent.includes('pending'));
+ await page.locator('[data-monitor-filter="history"]').click();assert.match(await page.locator(`[data-monitor-id="${pendingId}"] .terminal-monitor-badge`).textContent(),/Position open/);
+ await page.unroute('**/api/terminal/conditions/outcome');
+ for(let index=0;index<12;index++){
+  const archived=await post('terminal/conditions/start',{request_id:'history-filter-'+index,multiple:true,symbol:index%2?'GBPUSD':'EURUSD',expected_account:'123',expected_server:'Test-Demo',name:'Archive test '+index,rows:[{rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'M5',level:2}],settings:{...pendingSettings,action:'ALERT'}});
+  await post('terminal/conditions/stop',{id:archived.run.id});
+ }
+ await page.locator('#terminal-history-search').fill('Archive test');
+ await page.waitForFunction(()=>document.querySelector('#terminal-history-results').textContent.startsWith('12 of'));
+ assert.equal(await page.locator('.terminal-monitor-history .terminal-monitor-card').count(),10,'history is paginated');
+ await page.locator('#terminal-history-next').click();assert.equal(await page.locator('.terminal-monitor-history .terminal-monitor-card').count(),2);
+ await page.locator('#terminal-history-symbol').selectOption('EURUSD');assert.equal(await page.locator('.terminal-monitor-history .terminal-monitor-card').count(),6);
+ await page.locator('#terminal-history-status').selectOption('finished');assert.match(await page.locator('.terminal-monitor-history').textContent(),/No history matches/);
+ await page.locator('#terminal-history-status').selectOption('stopped');await page.locator('#terminal-history-period').selectOption('1');assert.equal(await page.locator('.terminal-monitor-history .terminal-monitor-card').count(),6);
+ await page.reload();await page.locator('#nav-terminal').click();await page.locator('#terminal-monitor-toolbar').click();
+ assert.equal(await page.locator('#terminal-history-search').inputValue(),'Archive test');assert.equal(await page.locator('#terminal-history-status').inputValue(),'stopped');
+ await page.waitForFunction(()=>document.querySelectorAll('.terminal-monitor-history .terminal-monitor-card').length===6);
+ await page.locator('#terminal-history-clear').click();assert.equal(await page.locator('#terminal-history-search').inputValue(),'');assert.equal(await page.locator('#terminal-history-symbol').inputValue(),'');
  assert.deepEqual(errors,[]);
  console.log('Multiple monitor browser tests passed: same-symbol independent entries, linked cancellation, separate reviews, reload, individual Stop and Stop all; fake broker only');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(async()=>{await browser?.close();server.kill();});

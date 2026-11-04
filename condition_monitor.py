@@ -82,6 +82,10 @@ class ConditionRun:
                 value=plan.get(key)
                 if not finite(value) or not low<=value<=high or key in ('buffer','sensitivity') and int(value)!=value:raise ValueError('Invalid automatic plan '+key+'.')
             if plan.get('timeframe') not in FRAMES or plan.get('entry') not in ('MARKET','RETEST'):raise ValueError('Invalid plan timeframe or entry.')
+            if plan.get('stop_basis','SWING') not in ('SWING','SIGNAL') or not isinstance(plan.get('hold_breakout',False),bool):raise ValueError('Invalid automatic plan protection options.')
+            if plan.get('stop_basis')=='SIGNAL' or plan.get('hold_breakout') and plan['entry']=='MARKET':
+                suffix='_UP' if ticket['side']=='BUY' else '_DOWN'
+                if not any(row['rule'] in STRUCTURE and row['rule'].endswith(suffix) for row in sequence.rows):raise ValueError('Breakout protection needs a matching BOS/MS condition.')
             if plan['entry']=='RETEST':
                 expiry=plan.get('expiry');suffix='_UP' if ticket['side']=='BUY' else '_DOWN'
                 if not finite(expiry) or int(expiry)!=expiry or not 1<=expiry<=1440:raise ValueError('Invalid retest expiry.')
@@ -294,7 +298,7 @@ class ConditionRun:
             if not swing or swing['broken']:raise ValueError('A usable confirmed stop swing is unavailable.')
             direction=1 if body['side']=='BUY' else -1
             trigger=next((e['structure'] for e in reversed(run['observations']) if e.get('structure',{}).get('direction')==direction),{})
-            result=self.terminal.condition_plan(dict(body,auto_plan=plan,stop_swing=dict(price=swing['price'],time=swing['time'],confirmed_time=swing['confirmed']),retest_level=trigger.get('level')))
+            result=self.terminal.condition_plan(dict(body,auto_plan=plan,stop_swing=dict(price=swing['price'],time=swing['time'],confirmed_time=swing['confirmed']),retest_level=trigger.get('level'),signal_candle=trigger.get('candle')))
         else:
             if settings['sizing']=='AUTO':
                 entry=(data['ask'] if body['side']=='BUY' else data['bid']) if body['order_kind']=='MARKET' else float(body['price'])
@@ -344,7 +348,7 @@ class ConditionMonitor:
     def __init__(self,terminal,lock,clock=time.time,interval=2,storage_path=None):
         self.terminal=terminal;self.lock=lock;self.clock=clock;self.interval=interval
         self.runners={};self.estimates={};self.requests={};self.latest=None;self.generation=0;self.registry_id=secrets.token_hex(16);self.snapshot_revision=0
-        self.shutdown=threading.Event();self.thread=None;self._closing=False;self.storage_warning='';self._store_signature=None;self._store_load_blocked=False
+        self.shutdown=threading.Event();self.thread=None;self._closing=False;self.storage_warning='';self._store_signature=None;self._store_load_blocked=False;self._journal_sync_at=-float('inf');self.journal_sync=None
         self.store=MonitorStore(storage_path) if storage_path is not None else None
         self._load_saved()
 
@@ -465,7 +469,7 @@ class ConditionMonitor:
         body=body or {};selected=body.get('id',self.latest)
         runs=[runner.status()['run'] for runner in self.runners.values()]
         self.snapshot_revision+=1
-        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning)
+        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning,journal_sync=copy.deepcopy(self.journal_sync))
 
     def start(self,body):
         if self.shutdown.is_set():raise ValueError('The server is shutting down. No new setup was started.')
@@ -552,6 +556,18 @@ class ConditionMonitor:
             elif runner.run['phase'] in ('skipped','invalidated') and not runner.run.get('sent'):runner.run.pop('_submission_intent',None)
             if result and result.get('retcode') in (10008,10009,10010):self._stop_linked(runner)
             elif runner.run.get('sent') and not result:self._stop_linked(runner,uncertain=True)
+        pending=[runner for runner in self.runners.values() if (runner.run.get('result') or {}).get('operation')=='pending' and (runner.run.get('result') or {}).get('retcode') in (10008,10009,10010) and (runner.run.get('trade_outcome') or {}).get('state') not in ('closed','cancelled','expired','rejected') and self.clock()-runner.run.get('_outcome_probe_at',-float('inf'))>=10]
+        if pending:
+            runner=min(pending,key=lambda item:item.run.get('_outcome_probe_at',-float('inf')));runner.run['_outcome_probe_at']=self.clock()
+            try:
+                from condition_outcome import outcome
+                runner.run['trade_outcome']=outcome(self.terminal,runner.run);runner.run.pop('outcome_error',None)
+            except Exception as error:runner.run['outcome_error']=str(error)
+        bridge=getattr(self.terminal,'bridge',None)
+        if bridge and callable(getattr(bridge,'sync_condition_trades',None)) and self.clock()-self._journal_sync_at>=10:
+            self._journal_sync_at=self.clock()
+            try:self.journal_sync=dict(bridge.sync_condition_trades(),checked_at=self.clock())
+            except Exception as error:self.journal_sync=dict(error=str(error),checked_at=self.clock())
         due=[runner for runner in self.runners.values() if runner.run['phase']=='stopped' and runner.run.get('interruption',{} ) and runner.run['interruption'].get('enabled') and self.clock()-runner.run.get('_recovery_probe_time',-float('inf'))>=10]
         if due:
             runner=min(due,key=lambda item:item.run.get('_recovery_probe_time',-float('inf')));runner.run['_recovery_probe_time']=self.clock();runner.recovery()

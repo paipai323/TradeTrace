@@ -16,7 +16,7 @@ def outcome(terminal, run):
     if not order and not deal:return report('unknown','Broker identifiers are unavailable. Check MT5 history.')
     pending=mt.orders_get(ticket=order) if order else ()
     if pending is None:raise ValueError('Cannot read pending orders from MT5. Try again.')
-    if pending:return report('pending','Waiting to fill · pending order remains in MT5.')
+    if pending:return report('pending','Waiting to fill · pending order remains in MT5.',price=getattr(pending[0],'price_open',None),order_type=getattr(pending[0],'type',None))
     orders=mt.history_orders_get(ticket=order) if order else ()
     if orders is None:raise ValueError('Cannot read broker order history. Try again.')
     deals=mt.history_deals_get(ticket=deal) if deal else ()

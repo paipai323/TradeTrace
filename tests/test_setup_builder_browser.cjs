@@ -30,9 +30,10 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  assert.equal(await page.locator('#terminal-auto-plan-risk').inputValue(),'0.75');assert.equal(await page.locator('#terminal-auto-plan-sensitivity').isVisible(),false);
  await page.locator('#terminal-builder-mode').click();assert.equal(await page.locator('#terminal-auto-plan-sensitivity').isVisible(),true);await page.locator('#terminal-auto-plan-sensitivity').fill('3');
  await page.locator('#terminal-builder-mode').click();assert.equal(await page.locator('#terminal-auto-plan-sensitivity').inputValue(),'3','simple mode keeps advanced values');
+ await page.locator('#terminal-auto-plan-stop_basis').selectOption('SIGNAL');await page.locator('#terminal-auto-plan-hold_breakout').check();
  await page.locator('#terminal-setup-builder').screenshot({path:path.join(root,'work/setup-builder-entry.png')});
  await page.locator('#terminal-builder-close').click();assert.equal(await page.locator('#terminal-auto-plan-risk').inputValue(),'0.75');assert.equal((await post('test/feed')).sent,0);
- await page.locator('#terminal-builder-open').click();await page.locator('#terminal-setup-new').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);
+ await page.locator('#terminal-builder-open').click();await page.locator('#terminal-builder-step-entry').click();assert.equal(await page.locator('#terminal-auto-plan-stop_basis').inputValue(),'SIGNAL');assert.equal(await page.locator('#terminal-auto-plan-hold_breakout').isChecked(),true);await page.locator('#terminal-setup-new').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);
  await page.locator('#terminal-condition-add').click();await page.locator('.terminal-condition-row button').filter({hasText:'Pick on chart'}).first().click();
  assert.equal(await page.locator('#terminal-setup-builder').isVisible(),false,'picking releases the chart');
  await page.locator('#terminal-chart').click({position:{x:260,y:150}});await page.locator('#terminal-builder-open').click();assert.equal(await page.locator('.terminal-condition-row').count(),1);

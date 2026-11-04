@@ -198,6 +198,41 @@ class Bridge:
         self.journal_account = self.journal.sync(self.account, self.server, self.mt.account_info().currency, trades)
         return dict(trades=trades, skipped=skipped)
 
+    def sync_condition_trades(self, limit=5):
+        """Import closed setup positions without changing date filters or reviews."""
+        self.check();account=self.mt.account_info()
+        rows=self.journal.unsynced_condition_entries(account.login,account.server)
+        if not rows:return dict(imported=0,waiting=0,unsupported=0)
+        cursor=getattr(self,'_condition_sync_cursor',0)%len(rows)
+        batch=(rows[cursor:]+rows[:cursor])[:limit];self._condition_sync_cursor=(cursor+len(batch))%len(rows)
+        imported=waiting=unsupported=0
+        for item in batch:
+            result=item.get('result') or {}
+            if result.get('retcode') not in (10008,10009,10010):continue
+            order=int(result.get('order') or 0);deal=int(result.get('deal') or 0);pid=int(item.get('position') or 0)
+            if not pid:
+                orders=self.mt.history_orders_get(ticket=order) if order else ()
+                deals=self.mt.history_deals_get(ticket=deal) if deal else ()
+                if orders is None or deals is None:raise ValueError('Setup journal sync: MT5 history unavailable.')
+                ids={int(row.position_id) for row in (*orders,*deals) if getattr(row,'position_id',0)}
+                if len(ids)!=1:waiting+=1;continue
+                pid=ids.pop();self.check();self.journal.link_condition_position(item['id'],account.login,account.server,pid)
+            opened=self.mt.positions_get()
+            if opened is None:raise ValueError('Setup journal sync: open positions unavailable.')
+            if any(int(getattr(row,'identifier',row.ticket))==pid for row in opened):waiting+=1;continue
+            deals=self.mt.history_deals_get(position=pid)
+            if deals is None:raise ValueError('Setup journal sync: closing history unavailable.')
+            trades,_=closed_positions(deals)
+            trade=next((trade for trade in trades if trade['id']==str(pid) and int(trade.get('entry_order',0))==order),None)
+            if trade is None:unsupported+=1;continue
+            self.check()
+            current=self.mt.account_info()
+            if (current.login,current.server)!=(account.login,account.server):raise ValueError('Account changed during setup journal sync.')
+            # Snapshot upsert preserves review text, drafts and screenshots.
+            self.journal.sync(account.login,account.server,account.currency,[trade],select_account=False)
+            self.trades[trade['id']]=trade;imported+=1
+        return dict(imported=imported,waiting=waiting,unsupported=unsupported)
+
     def replay(self, pid, context_minutes='auto', candle_timeframe='M1', after_minutes=60):
         self.stage = 'account'
         self.check()

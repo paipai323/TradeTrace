@@ -32,7 +32,7 @@ def estimate_run(runner):
             direction=1 if body['side']=='BUY' else -1
             trigger=next((e['structure'] for e in reversed(observations) if e.get('structure',{}).get('direction')==direction),{})
             if plan['entry']=='RETEST' and not trigger:raise EstimateUnavailable('Retest entry needs an observed matching BOS/MS break; its entry price is not known yet.')
-            body,calculation=terminal.calculate_condition_plan(dict(body,auto_plan=plan,stop_swing=dict(price=swing['price'],time=swing['time'],confirmed_time=swing['confirmed']),retest_level=trigger.get('level')))
+            body,calculation=terminal.calculate_condition_plan(dict(body,auto_plan=plan,stop_swing=dict(price=swing['price'],time=swing['time'],confirmed_time=swing['confirmed']),retest_level=trigger.get('level'),signal_candle=trigger.get('candle')))
             result['calculation']=calculation
         else:
             entry=(data['ask'] if body['side']=='BUY' else data['bid']) if body['order_kind']=='MARKET' else float(body['price'])

@@ -46,12 +46,12 @@ class Journal:
         finally:
             con.close()
 
-    def sync(self, login, server, currency, trades):
+    def sync(self, login, server, currency, trades, *, select_account=True):
         account = json.dumps([str(login), server], separators=(',', ':'))
         with self.db() as con:
             con.execute('INSERT INTO accounts VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET currency=excluded.currency',
                         (account, str(login), server, currency))
-            con.execute("INSERT INTO settings VALUES ('last_account',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (account,))
+            if select_account:con.execute("INSERT INTO settings VALUES ('last_account',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (account,))
             for trade in trades:
                 snapshot = dict(trade, currency=currency)
                 if trade.get('entry_order'):
@@ -109,6 +109,18 @@ class Journal:
             # Do not change an existing user's selected journal account.
             con.execute("INSERT OR IGNORE INTO settings VALUES ('last_account',?)",(account,))
         return account
+
+    def unsynced_condition_entries(self, login, server):
+        account=json.dumps([str(login),server],separators=(',',':'))
+        with self.db() as con:
+            rows=con.execute("""SELECT e.id,e.position,e.payload FROM condition_entries e
+                LEFT JOIN trades t ON t.account=e.account AND t.position=e.position
+                WHERE e.account=? AND t.position IS NULL ORDER BY e.created DESC LIMIT 200""",(account,)).fetchall()
+        return [dict(id=row['id'],position=row['position'],**json.loads(row['payload'])) for row in rows]
+
+    def link_condition_position(self, entry_id, login, server, position):
+        account=json.dumps([str(login),server],separators=(',',':'))
+        with self.db() as con:con.execute('UPDATE condition_entries SET position=? WHERE id=? AND account=?',(str(position),entry_id,account))
 
     def monitor_history_records(self):
         """Recover immutable accepted condition executions, without touching MT5."""

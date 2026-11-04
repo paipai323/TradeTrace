@@ -69,8 +69,8 @@ const journalAccount=JSON.stringify(['123','Test-Demo']);
   await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('EURUSD'));
   await page.locator('#terminal-setup-tab-conditions').click();
   assert.equal(await page.locator('#terminal-condition-starters').isVisible(),true);
-  assert.equal(await page.locator('#terminal-condition-starter option').count(),6);
-  for(const key of ['MS_UP','MS_DOWN','BOS_UP','BOS_DOWN','MS_UP_RETEST','MS_DOWN_RETEST']){
+  assert.equal(await page.locator('#terminal-condition-starter option').count(),8);
+  for(const key of ['MS_UP','MS_DOWN','BOS_UP','BOS_DOWN','BOS_UP_RETEST','BOS_DOWN_RETEST','MS_UP_RETEST','MS_DOWN_RETEST']){
     await page.locator('#terminal-condition-starter').selectOption(key);
     await page.locator('#terminal-condition-starter-frame').selectOption('M15');await page.locator('#terminal-condition-starter-risk').fill('0.75');
     await page.locator('#terminal-condition-starter-load').click();await page.waitForFunction(()=>!document.querySelector('#terminal-setup-new').disabled);
@@ -80,6 +80,8 @@ const journalAccount=JSON.stringify(['123','Test-Demo']);
     assert.equal(await page.locator('.terminal-condition-row [data-field=sensitivity]').inputValue(),'2');
     assert.equal(await page.locator('#terminal-side').inputValue(),key.includes('_UP')?'BUY':'SELL');
     assert.equal(await page.locator('#terminal-auto-plan-enabled').isChecked(),true);
+    assert.equal(await page.locator('#terminal-auto-plan-stop_basis').inputValue(),'SIGNAL');
+    assert.equal(await page.locator('#terminal-auto-plan-hold_breakout').isChecked(),!key.endsWith('_RETEST'));
     assert.equal(await page.locator('#terminal-invalidation-enabled').isChecked(),true);
     assert.equal(await page.locator('#terminal-invalidation-source').inputValue(),'SWING');
     assert.equal(await page.locator('#terminal-invalidation-timeframe').inputValue(),'M15');
@@ -106,6 +108,6 @@ const journalAccount=JSON.stringify(['123','Test-Demo']);
   assert.equal(await page.locator('#terminal-auto-plan-risk').inputValue(),'0.5');assert.equal(await page.locator('#terminal-side').inputValue(),'BUY');
   await page.locator('#terminal-condition-starters').scrollIntoViewIfNeeded();await page.locator('#terminal-ticket').screenshot({path:path.join(root,'work/starter-templates.png')});
   await page.reload();await page.locator('#nav-terminal').click();await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('EURUSD'));await page.locator('#terminal-setup-tab-conditions').click();
-  assert.equal(await page.locator('#terminal-condition-starter option').count(),6);assert.equal(await page.locator('#terminal-condition-action').inputValue(),'ALERT');
+  assert.equal(await page.locator('#terminal-condition-starter option').count(),8);assert.equal(await page.locator('#terminal-condition-action').inputValue(),'ALERT');
   assert.equal(submissions,0);assert.deepEqual(errors,[]);console.log('Starter template browser tests passed (mock broker; no real trades)');
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{await browser?.close();server.kill();});

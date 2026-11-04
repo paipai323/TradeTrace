@@ -46,7 +46,7 @@ class FakeTerminal:
             market=saved['order_kind']=='MARKET';entry=(self.bid+.0001 if saved['side']=='BUY' else self.bid) if market else float(saved['price'])
             check_quality(saved['condition_entry_quality'],entry,float(saved['sl']),float(saved['tp']),saved['side'],.00001,market)
         self.sent.append(saved)
-        return dict(retcode=10009,comment='Fake broker execution',order=str(len(self.sent)),deal=str(len(self.sent)),volume=float(saved['volume']),price=self.bid+.0001,operation='open',journal_recorded=True,message='Fake broker only')
+        return dict(retcode=10009,comment='Fake broker execution',order=str(len(self.sent)),deal=str(len(self.sent)),volume=float(saved['volume']),price=self.bid+.0001,operation='open' if saved['order_kind']=='MARKET' else 'pending',requested_price=saved.get('price'),journal_recorded=True,message='Fake broker only')
 
 
 terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1,storage_path=os.environ.get('TRADETRACE_TEST_MONITOR_STORE'))

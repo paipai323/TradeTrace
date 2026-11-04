@@ -37,4 +37,18 @@ class OutcomeTests(unittest.TestCase):
  def test_rr_unavailable_without_original_sl(self):
   self.orders=(NS(position_id=30),);self.assertIsNone(outcome(self.terminal,self.run)['r_multiple'])
 
+class PendingMonitorRefreshTests(unittest.TestCase):
+ def test_pending_refresh_is_throttled_and_stops_when_closed(self):
+  import threading
+  from unittest.mock import patch
+  from condition_monitor import ConditionMonitor
+  now=[100];monitor=ConditionMonitor(NS(),threading.RLock(),lambda:now[0])
+  run=dict(phase='finished',result=dict(operation='pending',retcode=10008),id='pending')
+  monitor.runners['pending']=NS(run=run)
+  with patch('condition_outcome.outcome',side_effect=[dict(state='pending'),dict(state='open'),dict(state='closed')]) as probe:
+   monitor.tick();monitor.tick();self.assertEqual(probe.call_count,1);self.assertEqual(run['trade_outcome']['state'],'pending')
+   now[0]+=10;monitor.tick();self.assertEqual(run['trade_outcome']['state'],'open')
+   now[0]+=10;monitor.tick();self.assertEqual(run['trade_outcome']['state'],'closed')
+   now[0]+=10;monitor.tick();self.assertEqual(probe.call_count,3)
+
 if __name__=='__main__':unittest.main()
