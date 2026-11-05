@@ -12,6 +12,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import server
 from condition_monitor import ConditionMonitor
 from keep_awake import KeepAwake
+from restart_resume import RestartPolicy
 from entry_quality import check_quality
 
 
@@ -61,7 +62,7 @@ class FakePower:
 
 power=FakePower();saved_path=os.environ.get('TRADETRACE_TEST_MONITOR_STORE')
 awake=KeepAwake(Path(saved_path).with_name('keep-awake.json') if saved_path else None,backend=power)
-terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1,storage_path=saved_path,keep_awake=awake)
+terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1,storage_path=saved_path,keep_awake=awake,resume_policy=RestartPolicy(Path(saved_path).with_name('restart-resume.json') if saved_path else None))
 
 
 class Handler(server.Handler):
@@ -89,6 +90,7 @@ class Handler(server.Handler):
             if 'account' in body:terminal.account=body['account']
             if 'failure' in body:terminal.failure=body['failure']
             if 'preview_delay' in body:terminal.preview_delay=body['preview_delay'];terminal.preview_started.clear()
+            if body.get('expire_pause') and server.condition_monitor.run and server.condition_monitor.run.get('quote_pause'):server.condition_monitor.run['quote_pause']['deadline']=time.time()-1
             if body.get('expire') and server.condition_monitor.run:server.condition_monitor.run['review_deadline']=time.time()-1
             return self.send(dict(sent=len(terminal.sent),previews=len(terminal.previews),state=server.condition_monitor.status()))
         return super().handle_api()

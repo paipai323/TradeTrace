@@ -80,7 +80,7 @@ class MonitorTests(unittest.TestCase):
                 elif failure=='account':self.terminal.account.login=456
                 elif failure=='stale':self.terminal.delta=-40
                 self.advance(101,seconds=31 if failure=='sleep' else 2)
-                self.assertEqual(self.monitor.status()['run']['phase'],'stopped');self.assertEqual(self.terminal.sent,[])
+                self.assertEqual(self.monitor.status()['run']['phase'],'paused' if failure=='stale' else 'stopped');self.assertEqual(self.terminal.sent,[])
     def test_old_stop_cannot_stop_replacement_or_restart_after_server_restart(self):
         old=self.monitor.start(self.body)['run']['id'];self.body['request_id']='unique-new-start';new=self.monitor.start(self.body)['run']['id']
         self.monitor.stop(dict(id=old));self.assertEqual(self.monitor.status()['run']['id'],new);self.assertEqual(self.monitor.status()['run']['phase'],'running')

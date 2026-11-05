@@ -237,3 +237,7 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 
 .terminal-awake-chip{font-size:10px!important;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.terminal-awake-chip[data-state=active]{color:#9ff0cd;border-color:#438e75}.terminal-awake-chip[data-state=battery],.terminal-awake-chip[data-state=error],.terminal-awake-chip[data-state=off]{color:#ffdb8b;border-color:#9a7841}
 .terminal-awake-controls{border:1px solid #37556a;border-radius:6px;padding:10px 12px;margin:10px 0;font-size:12px}.terminal-awake-controls>label{display:flex;gap:9px;align-items:center;font-weight:600}.terminal-awake-controls input{width:16px;height:16px;margin:0}.terminal-awake-controls p{line-height:1.6;margin:6px 0}.terminal-awake-controls summary{cursor:pointer;color:#9cb9d1;font-size:11px}#terminal-keep-awake-status[data-state=active]{color:#9ff0cd}#terminal-keep-awake-status[data-state=battery],#terminal-keep-awake-status[data-state=error],#terminal-keep-awake-error{color:#ffdb8b}
+
+.terminal-monitor-card[data-phase=paused] .terminal-monitor-badge{background:#514322;color:#ffe2a2}.terminal-chip[data-phase=paused]{border-color:#ad8646;color:#ffe2a2}
+
+#terminal-restart-resume-status{font-size:11px;color:#b4ccdf}#terminal-restart-resume-error{color:#ffdb8b}.terminal-monitor-card[data-phase=resuming] .terminal-monitor-badge{background:#294663;color:#c2e5ff}

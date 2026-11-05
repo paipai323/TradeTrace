@@ -716,7 +716,7 @@
   el('chart').addEventListener('pointercancel',()=>{finishConditionDrag(true);finishOrderDrag(true);finishDrawingDrag(true);},true);
   const C=window.TerminalConditions;
   let conditionRun=null,conditionBusy=false,conditionDraftScope='',conditionFinished='',conditionLastResult='',conditionApplied=null,conditionDraftValid=true;
-  const conditionMessage=message=>{if(el('condition-status').textContent!==message)el('condition-status').textContent=message;const phase=serverMonitorActive()?(serverMonitor.phase==='review'?'Review':'Running'):serverMonitor?.phase==='saved'?'Saved':serverMonitor?.phase==='stopped'&&serverMonitor.interruption?.enabled?'Interrupted':conditionFinished?(conditionFinished.startsWith('Invalidated')?'Invalidated':conditionFinished.startsWith('Skipped')?'Skipped':'Finished'):conditionBusy?'Finishing':message.startsWith('Stopped')?'Stopped':'Draft';el('setup-phase').textContent=phase;el('setup-phase').dataset.phase=phase.toLowerCase();el('condition-stop').disabled=!serverMonitorActive()&&!conditionBusy;el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;};
+  const conditionMessage=message=>{if(el('condition-status').textContent!==message)el('condition-status').textContent=message;const phase=serverMonitorActive()?(serverMonitor.phase==='review'?'Review':serverMonitor.phase==='paused'?'Paused':serverMonitor.phase==='resuming'?'Checking restart':'Running'):serverMonitor?.phase==='saved'?'Saved':serverMonitor?.phase==='stopped'&&serverMonitor.interruption?.enabled?'Interrupted':conditionFinished?(conditionFinished.startsWith('Invalidated')?'Invalidated':conditionFinished.startsWith('Skipped')?'Skipped':'Finished'):conditionBusy?'Finishing':message.startsWith('Stopped')?'Stopped':'Draft';el('setup-phase').textContent=phase;el('setup-phase').dataset.phase=phase.toLowerCase();el('condition-stop').disabled=!serverMonitorActive()&&!conditionBusy;el('setup-new').disabled=conditionBusy||submitting||reviewing||closing;};
   const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
   function detachConditions(message){serverStateKey='' ;if(serverMonitorActive()){conditionMessage(`${serverMonitor.symbol} · server monitoring continues. Reconnecting the display does not stop it.`);return;}conditionRun=null;if(conditionApplied?.state==='running')conditionApplied.state='stopped';if(el('condition-status'))conditionMessage(conditionFinished||message);renderConditionProgress();}
   function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high','sensitivity'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
@@ -774,7 +774,10 @@
     const enabled=el('keep-awake-enabled').checked;keepAwakeBusy=true;el('keep-awake-enabled').disabled=true;el('keep-awake-error').hidden=true;
     try{receiveServerConditions(await call('terminal/keep-awake',{enabled}));}catch(error){el('keep-awake-error').textContent='Keep-awake change not confirmed: '+error.message;el('keep-awake-error').hidden=false;}finally{keepAwakeBusy=false;renderKeepAwake();}
   };
-  function serverMonitorActive(){return !!serverMonitor&&['running','review','finishing'].includes(serverMonitor.phase);}
+  let restartResumeState=null,restartResumeBusy=false;
+  function renderRestartResume(value){if(value)restartResumeState=value;const state=restartResumeState;if(!state)return;el('restart-resume-enabled').checked=state.enabled;el('restart-resume-enabled').disabled=restartResumeBusy;el('restart-resume-status').textContent=state.error||(!state.enabled?'Automatic restart resume off · saved setups require explicit Start.':state.checking?`Checking ${state.checking} setup(s) after restart. Orders remain blocked until continuity checks pass.`:'Automatic restart resume on · clean restarts within 30 seconds only. Unsafe setups remain disarmed.');}
+  el('restart-resume-enabled').onchange=async()=>{const enabled=el('restart-resume-enabled').checked;restartResumeBusy=true;el('restart-resume-enabled').disabled=true;el('restart-resume-error').hidden=true;try{receiveServerConditions(await call('terminal/restart-resume',{enabled}));}catch(error){el('restart-resume-error').textContent='Restart setting not confirmed: '+error.message;el('restart-resume-error').hidden=false;}finally{restartResumeBusy=false;renderRestartResume();}};
+  function serverMonitorActive(){return !!serverMonitor&&['running','paused','resuming','review','finishing'].includes(serverMonitor.phase);}
   function receiveServerConditions(payload){
     if(payload.journal_sync){const sync=payload.journal_sync;el('monitor-journal-sync').textContent=sync.error?'Automatic setup journal sync waiting: '+sync.error:sync.unsupported?'Automatic journal sync: some positions have incomplete history or scale-ins/partial closes unsupported by replay. Check MT5.':'Setup trades sync to journal automatically after closing. Open Journal to review or replay them.';}
     if(payload.storage_warning!==undefined){const warning=el('monitor-storage-status');if(warning.textContent!==payload.storage_warning)warning.textContent=payload.storage_warning;warning.hidden=!payload.storage_warning;}
@@ -784,6 +787,7 @@
       serverRegistryId=payload.registry_id;serverSnapshotRevision=payload.snapshot_revision;
     }
     if(payload.keep_awake)renderKeepAwake(payload.keep_awake);
+    if(payload.restart_resume)renderRestartResume(payload.restart_resume);
     if(Array.isArray(payload.runs)){serverMonitors=payload.runs;const ids=new Set(serverMonitors.map(run=>run.id));for(const id of monitorEstimates.keys())if(!ids.has(id)){monitorEstimates.delete(id);monitorEstimateOpen.delete(id);}}
     else if(payload.run){const index=serverMonitors.findIndex(r=>r.id===payload.run.id);if(index<0)serverMonitors.push(payload.run);else serverMonitors[index]=payload.run;}
     if(selectedMonitorId===null&&payload.run)selectedMonitorId=payload.run.id;
@@ -811,7 +815,7 @@
         saveConditions();renderConditionProgress();
       }
       conditionMessage((same?'':`${run.symbol} · account ${run.account} · `)+run.message);
-      el('setup-phase').textContent=run.phase==='review'?'Review':run.phase==='running'?'Running':run.phase==='saved'?'Saved':run.phase==='stopped'?(run.interruption?.enabled?'Interrupted':'Stopped'):run.phase==='invalidated'?'Invalidated':run.phase==='skipped'?'Skipped':'Finished';
+      el('setup-phase').textContent=run.phase==='review'?'Review':run.phase==='paused'?'Paused':run.phase==='resuming'?'Checking restart':run.phase==='running'?'Running':run.phase==='saved'?'Saved':run.phase==='stopped'?(run.interruption?.enabled?'Interrupted':'Stopped'):run.phase==='invalidated'?'Invalidated':run.phase==='skipped'?'Skipped':'Finished';
     }
     if(run.phase==='review'&&same&&run.review&&run.review.preview!==serverReviewShown){
       const result=run.review;serverReviewShown=result.preview;
@@ -838,7 +842,7 @@
   }
   async function stopServerConditions(reason='Stopped by user. Already submitted orders remain in MT5.'){
     const id=serverMonitor?.id;if(!id)return true;
-    try{const result=await call('terminal/conditions/stop',{id,reason});receiveServerConditions(result);if(result.run&&['running','review','finishing'].includes(result.run.phase)){conditionMessage('A different server setup is active. Stop it before clearing this draft.');return false;}return true;}
+    try{const result=await call('terminal/conditions/stop',{id,reason});receiveServerConditions(result);if(result.run&&['running','paused','resuming','review','finishing'].includes(result.run.phase)){conditionMessage('A different server setup is active. Stop it before clearing this draft.');return false;}return true;}
     catch(error){conditionMessage('Stop not confirmed. The server may still be monitoring. Check the server and retry Stop. '+error.message);return false;}
   }
   async function stopBeforeDraft(reason){if(conditionBusy||submitting||reviewing||closing)return false;conditionBusy=true;updateTicket();try{return await stopServerConditions(reason);}finally{conditionBusy=false;updateTicket();}}
@@ -928,9 +932,9 @@
   function matchingAppliedCondition(row,index){return serverMonitor?.id!==serverDetachedId&&serverMonitor?.scope===scope&&serverMonitor.symbol===el('symbol').value&&conditionSignature(row)===conditionSignature(serverMonitor.rows[index])&&(!row?.id||row.id===serverMonitor.rows[index]?.id);}
   function renderConditionWaiting(){
     let message='';const run=serverMonitor;
-    if(run&&run.id!==serverDetachedId&&run.scope===scope&&run.symbol===el('symbol').value&&run.phase==='running'){
+    if(run&&run.id!==serverDetachedId&&run.scope===scope&&run.symbol===el('symbol').value&&['running','paused','resuming'].includes(run.phase)){
       const row=run.rows[run.applied.index],history=row?structureHistories.get(structureKey(row.timeframe)):null;
-      message=run.retest_confirmation?.message||C.waitingDescription(row,run.structureState,{digits:market?.digits,now:Date.now()/1000,formingTime:history?.formingTime,quoteTime:history?.quoteTime});
+      message=['paused','resuming'].includes(run.phase)?run.message:run.retest_confirmation?.message||C.waitingDescription(row,run.structureState,{digits:market?.digits,now:Date.now()/1000,formingTime:history?.formingTime,quoteTime:history?.quoteTime});
       if(row&&conditionSignature(conditionRows()[run.applied.index])!==conditionSignature(row))message+=' Uses applied settings; draft edits are not active.';
     }
     for(const id of ['condition-waiting','monitor-waiting']){const node=el(id);if(node.textContent!==message)node.textContent=message;node.hidden=!message;}
@@ -1557,24 +1561,24 @@
   function monitorPending(run){const state=monitorTradeOutcome(run)?.state;return run.result?.operation==='pending'&&[10008,10009,10010].includes(run.result.retcode)&&(!state||['pending','unknown'].includes(state));}
   function renderMonitorList(){
     const pendingRuns=serverMonitors.filter(monitorPending);
-    const active=serverMonitors.filter(r=>['running','review','finishing'].includes(r.phase)),saved=serverMonitors.filter(r=>r.phase==='saved');el('monitor-count').textContent=`${active.length} active${saved.length?' · '+saved.length+' saved':''}${pendingRuns.length?' · '+pendingRuns.length+' pending':''}`;
+    const active=serverMonitors.filter(r=>['running','paused','resuming','review','finishing'].includes(r.phase)),saved=serverMonitors.filter(r=>r.phase==='saved');el('monitor-count').textContent=`${active.length} active${saved.length?' · '+saved.length+' saved':''}${pendingRuns.length?' · '+pendingRuns.length+' pending':''}`;
     const attentionCount=serverMonitors.filter(r=>r.phase==='review'||r.phase==='saved'||(r.phase==='stopped'&&r.interruption?.enabled)).length;
     el('monitor-toolbar').replaceChildren(document.createTextNode(`Monitoring · ${active.length}${pendingRuns.length?' · '+pendingRuns.length+' pending':''}`));
     if(attentionCount)el('monitor-toolbar').append(text('span',`${attentionCount} need attention`,'terminal-monitor-attention-badge'));
     el('monitor-toolbar').title=attentionCount?`${attentionCount} setups need review or restart`:'Open monitoring workspace';
     el('monitor-overview').textContent=el('monitor-count').textContent+' · all symbols';
     el('monitor-stop-all').disabled=!active.length&&!saved.length;el('monitor-add').disabled=conditionBusy||submitting||reviewing||closing;
-    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview,r.interruption?.checked_at,r.interruption?.enabled,r.trade_outcome,r.outcome_error,r.retest_confirmation]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing,monitorFilter,outcomeRevision,historyFilters,historyPage]));
+    const key=JSON.stringify(serverMonitors.map(r=>[r.id,r.phase,r.message,r.applied?.index,r.revision,r.review?.preview,r.interruption?.checked_at,r.interruption?.enabled,r.trade_outcome,r.outcome_error,r.retest_confirmation,r.quote_pause,r.safe_resume]).concat([selectedMonitorId,scope,conditionBusy,submitting,reviewing,closing,monitorFilter,outcomeRevision,historyFilters,historyPage]));
     if(el('monitor-list').dataset.key===key)return;el('monitor-list').dataset.key=key;
     const previousHistory=el('monitor-list').querySelector('.terminal-monitor-history'),historyOpen=previousHistory?.open===true;
     const liveCards=[],pendingCards=[],attentionCards=[],historyCards=[];
     const cards=serverMonitors.slice().reverse().sort((a,b)=>a.symbol.localeCompare(b.symbol)).map(run=>{
       const card=text('article','','terminal-monitor-card');card.dataset.monitorId=run.id;card.dataset.selected=String(run.id===selectedMonitorId);
       card.dataset.phase=run.phase;card.dataset.symbol=run.symbol;card.dataset.started=String(run.started||0);
-      const live=['running','review','finishing'].includes(run.phase),attention=run.phase==='saved'||(run.interruption?.enabled&&run.phase==='stopped');
+      const live=['running','paused','resuming','review','finishing'].includes(run.phase),attention=run.phase==='saved'||(run.interruption?.enabled&&run.phase==='stopped');
       const pending=monitorPending(run);
       (live?liveCards:pending?pendingCards:attention?attentionCards:historyCards).push(card);
-      const heading=text('div','','terminal-monitor-heading'),status=pending?(monitorTradeOutcome(run)?.state==='pending'?'Pending · waiting to fill':'Pending submitted · checking'):monitorTradeOutcome(run)?.state==='open'?'Position open':run.phase==='running'?'Monitoring':run.phase==='review'?'Review needed':run.phase==='finishing'?'Submitting':run.phase==='saved'?'Saved · not armed':attention?'Interrupted':run.phase;
+      const heading=text('div','','terminal-monitor-heading'),status=pending?(monitorTradeOutcome(run)?.state==='pending'?'Pending · waiting to fill':'Pending submitted · checking'):monitorTradeOutcome(run)?.state==='open'?'Position open':run.phase==='resuming'?'Checking restart':run.phase==='paused'?'Paused · quote gap':run.phase==='running'?'Monitoring':run.phase==='review'?'Review needed':run.phase==='finishing'?'Submitting':run.phase==='saved'?'Saved · not armed':attention?'Interrupted':run.phase;
       heading.append(text('strong',`${run.symbol} · ${run.settings.ticket.side}`),text('span',status,'terminal-monitor-badge'));card.append(heading);
       card.append(text('span',monitorDisplayName(run)+(run.id===selectedMonitorId?' · Selected':''),'terminal-monitor-name'));
       if(pending){const ticket=run.settings.ticket;const recordedLevel=monitorTradeOutcome(run)?.price||run.result.requested_price;const level=recordedLevel||(run.settings.autoPlan?.entry==='RETEST'? [...(run.observations||[])].reverse().find(event=>event.structure?.direction===(ticket.side==='BUY'?1:-1))?.structure?.level:ticket['order-price']);card.append(text('p',`Order #${run.result.order} · ${ticket.side} ${run.settings.autoPlan?.entry==='RETEST'?'LIMIT':'pending'}${Number(level)>0?' at '+level:''}. Broker order remains until filled, cancelled or expired.`,'terminal-monitor-pending-info'));if(run.outcome_error)card.append(text('p','Status refresh unavailable: '+run.outcome_error,'terminal-monitor-meta'));}
@@ -1586,7 +1590,7 @@
       if(run.group)card.append(text('span',`${run.group} · ${run.group_policy==='FIRST_ENTRY'?'First entry stops others':'All may enter'}`,'terminal-monitor-meta'));
       card.append(text('p',run.phase==='running'?run.retest_confirmation?.message||C.waitingDescription(run.rows[run.applied.index],run.structureState,{digits:run.symbol===el('symbol').value?market?.digits:undefined}):run.message,'terminal-monitor-waiting-text'));const actions=document.createElement('div'),open=text('button',run.phase==='review'?'Open review':'Open setup'),stop=text('button',run.phase==='saved'?'Dismiss saved':'Stop');open.type=stop.type='button';
       open.disabled=run.scope!==scope||conditionBusy||submitting||reviewing||closing;open.onclick=()=>openMonitoredSetup(run.id);
-      stop.disabled=!['running','review','finishing','saved'].includes(run.phase);stop.onclick=async()=>{try{receiveServerConditions(await call('terminal/conditions/stop',{id:run.id}));}catch(error){conditionMessage('Stop not confirmed: '+error.message);}};
+      stop.disabled=!['running','paused','resuming','review','finishing','saved'].includes(run.phase);stop.onclick=async()=>{try{receiveServerConditions(await call('terminal/conditions/stop',{id:run.id}));}catch(error){conditionMessage('Stop not confirmed: '+error.message);}};
       if(run.phase==='saved'){const resume=text('button','Review saved setup');resume.type='button';resume.disabled=run.scope!==scope||conditionBusy||submitting||reviewing||closing;resume.onclick=async()=>{await openMonitoredSetup(run.id);if(selectedMonitorId===run.id){openSetupBuilder('review');syncConditionStartLabel();renderBuilderSummary();}};card.append(resume);}
       if(run.interruption?.enabled&&run.phase==='stopped'){
         const recovery=text('div','','terminal-monitor-recovery');recovery.append(text('strong',run.interruption.ready?'Connection restored—review and restart':'Monitoring interrupted'),text('p',recoveryDescription(run)));
@@ -1602,7 +1606,7 @@
       actions.append(open,stop,view,duplicate);
       if(run.result&&[10008,10009,10010].includes(run.result.retcode)){const highlight=text('button','Highlight order');highlight.type='button';highlight.disabled=open.disabled;highlight.onclick=async()=>{focusedBrokerSetupId=run.id;await openMonitoredSetup(run.id,false);if(market)renderMarket();};actions.append(highlight);}
       card.append(actions);
-      if(!['running','review','finishing','saved'].includes(run.phase)){
+      if(!['running','paused','resuming','review','finishing','saved'].includes(run.phase)){
         const area=text('div','','terminal-monitor-outcome'),cached=monitorOutcomes.get(run.id),value=monitorTradeOutcome(run);
         const labels={pending:'Waiting to fill',open:'Position open',closed:'Trade closed',cancelled:'Cancelled',expired:'Expired',rejected:'Rejected',unknown:'Outcome unconfirmed',shared:'Shared position',no_order:'No order submitted'};
         const initial=run.result?( [10008,10009,10010].includes(run.result.retcode)?'Submitted · check trade outcome':'Broker rejected request'):'No confirmed trade result';
@@ -1831,7 +1835,7 @@
     const total=Number.isFinite(planned)?e.risk+planned:null;
     const positionRisk=e.items.filter(item=>item.kind==='position').reduce((sum,item)=>sum+item.risk,0),pendingRisk=e.items.filter(item=>item.kind==='pending').reduce((sum,item)=>sum+item.risk,0);
     let waitingPercent=0,waitingUnknown=0;
-    for(const run of serverMonitors){if(run.id===selectedMonitorId||run.scope!==scope||!['running','review','finishing'].includes(run.phase)||run.action==='ALERT'||run.result)continue;const settings=run.settings;if(settings.autoPlan?.enabled)waitingPercent+=settings.autoPlan.risk;else if(settings.sizing==='AUTO')waitingPercent+=2;else waitingUnknown++;}
+    for(const run of serverMonitors){if(run.id===selectedMonitorId||run.scope!==scope||!['running','paused','resuming','review','finishing'].includes(run.phase)||run.action==='ALERT'||run.result)continue;const settings=run.settings;if(settings.autoPlan?.enabled)waitingPercent+=settings.autoPlan.risk;else if(settings.sizing==='AUTO')waitingPercent+=2;else waitingUnknown++;}
     const waitingText=waitingPercent||waitingUnknown?` Other armed setups: ${waitingPercent.toFixed(2)}% planned equity risk${waitingUnknown?' + '+waitingUnknown+' unestimated fixed-lot setups':''}. ${total!==null?'If they also enter: '+(total+e.equity*waitingPercent/100).toFixed(2)+' '+e.currency+' known risk. ':''}Linked alternatives are counted conservatively. `:'';
     el('exposure-summary').textContent=`Combined risk: ${e.risk_percent?.toFixed(2)??'—'}% existing${total!==null&&e.equity>0?' → '+(total/e.equity*100).toFixed(2)+'% with draft':''}${waitingPercent?' · '+waitingPercent.toFixed(2)+'% other armed':''}${e.unknown.length||waitingUnknown?' · incomplete estimate':''} · details`;
 

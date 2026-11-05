@@ -19,9 +19,11 @@ class InterruptionRecoveryTests(unittest.TestCase):
         for _ in range(5):self.advance(110,seconds=12)
         self.assertEqual(self.terminal.sent,[]);self.assertEqual(self.monitor.status()['run']['applied']['index'],0)
 
-    def test_stale_quote_restores_connection_without_rearming(self):
+    def test_stale_quote_expires_before_manual_recovery(self):
         run=self.monitor.start(self.body)['run'];self.terminal.delta=-40;self.advance(101)
-        self.assertEqual(self.monitor.run['interruption']['kind'],'stale_quote');self.assertFalse(self.monitor.run['interruption']['ready'])
+        self.assertEqual(self.monitor.run['phase'],'paused');self.assertIsNone(self.monitor.run['interruption'])
+        for _ in range(61):self.advance(seconds=2)
+        self.assertEqual(self.monitor.run['phase'],'stopped');self.assertEqual(self.monitor.run['interruption']['kind'],'stale_quote')
         self.terminal.delta=0;result=self.monitor.recovery({'id':run['id']})['run']
         self.assertTrue(result['interruption']['ready']);self.assertEqual(result['phase'],'stopped');self.assertEqual(self.terminal.sent,[])
         self.advance(110);self.assertEqual(self.terminal.sent,[])

@@ -11,6 +11,7 @@ class EstimateUnavailable(ValueError):pass
 def estimate_run(runner):
     run=runner.run;terminal=runner.terminal
     result=dict(id=run['id'],status='unavailable',at=int(runner.clock()*1000),note='Estimate at current quote. Conditions have not passed; prices, swings and lots are recalculated at execution. Broker checks run at execution.')
+    if run['phase']=='paused':return dict(result,reason='Quotes are paused. Orders are blocked until recovery checks pass.')
     if run['phase']!='running':return dict(result,reason='This setup is not waiting for conditions. Open its result or prepared review.')
     if run['action']=='ALERT':return dict(result,status='alert',reason='Alerts only: this setup will not place an order.')
     try:data=runner._market('M1')

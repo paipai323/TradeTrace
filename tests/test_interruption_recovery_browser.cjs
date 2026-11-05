@@ -19,9 +19,9 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
 
  const first=await setup(1.104,'AUTO');await post('test/feed',{quote_age:60,poll_gap:45});
  let state=await waitState(s=>s.state.run.phase==='stopped'&&s.state.run.interruption);assert.equal(state.sent,0);assert.equal(state.state.run.interruption.kind,'poll_gap');
- let card=page.locator(`[data-monitor-id="${first}"]`);await card.locator('.terminal-monitor-recovery').waitFor();assert.match(await card.textContent(),/Last fresh quote.*Gap at detection/);
+ await page.locator('#terminal-monitor-toolbar').click();let card=page.locator(`[data-monitor-id="${first}"]`);await card.locator(':scope>.terminal-monitor-row-details').evaluate(e=>e.open=true);await card.locator('.terminal-monitor-recovery').waitFor();assert.match(await card.textContent(),/Last fresh quote.*Gap at detection/);
  assert.equal(await card.getByRole('button',{name:'Review & restart',exact:true}).isDisabled(),true);
- await page.reload();await page.locator('#nav-terminal').click();card=page.locator(`[data-monitor-id="${first}"]`);await card.locator('.terminal-monitor-recovery').waitFor();
+ await page.reload();await page.locator('#nav-terminal').click();await page.locator('#terminal-monitor-toolbar').click();card=page.locator(`[data-monitor-id="${first}"]`);await card.locator(':scope>.terminal-monitor-row-details').evaluate(e=>e.open=true);await card.locator('.terminal-monitor-recovery').waitFor();
  await post('test/feed',{quote_age:0});await card.getByRole('button',{name:'Check connection',exact:true}).click();
  await card.getByRole('button',{name:'Review & restart',exact:true}).waitFor();await page.waitForFunction(id=>!document.querySelector(`[data-monitor-id="${id}"] .terminal-monitor-recovery button:last-child`).disabled,first);
  assert.match(await card.textContent(),/Connection restored/);await page.waitForTimeout(2200);state=await post('test/feed');assert.equal(state.sent,0);assert.equal(state.state.run.phase,'stopped','fresh quotes never resume trading');

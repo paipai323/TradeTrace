@@ -10,6 +10,7 @@ from condition_engine import Sequence, Structure, STRUCTURE, FRAMES, finite
 from terminal import ConditionInvalidated
 from condition_estimate import estimate_run
 from monitor_store import MonitorStore
+from restart_resume import RestartPolicy,checkpoint,consume_checkpoints,restore_sequence,MAX_RESTART_GAP
 from entry_quality import EntryQualitySkipped, validate_quality, resolve_quality, check_quality
 
 
@@ -53,7 +54,7 @@ class ConditionRun:
     def status(self,body=None):
         if not self.run:return dict(run=None)
         run=self.run;result={key:copy.deepcopy(value) for key,value in run.items() if not key.startswith('_') and key not in ('sequence','event_no','fingerprint','review_deadline')}
-        result['applied']=dict(rows=copy.deepcopy(run['rows']),index=run['sequence'].index,state='running' if run['phase']=='running' else 'finished' if run['attempted'] and run['phase']!='invalidated' else 'stopped',settings=copy.deepcopy(run['settings']))
+        result['applied']=dict(rows=copy.deepcopy(run['rows']),index=run['sequence'].index,state='running' if run['phase'] in ('running','paused') else 'finished' if run['attempted'] and run['phase']!='invalidated' else 'stopped',settings=copy.deepcopy(run['settings']))
         result['structureState']=copy.deepcopy(run['sequence'].structure_state)
         result['revision']=run['event_no']
         return dict(run=result)
@@ -111,6 +112,7 @@ class ConditionRun:
                       sequence=sequence,phase='running',attempted=False,started=int(self.clock()*1000),last_poll=self.clock(),last_quote_time=initial['quote_time'],last_observed_at=self.clock(),interruption=None,
                       message=f'Server monitoring · {symbol} · step {1 if sequence.rows else 0} of {len(sequence.rows)}. Continues while the browser is hidden.',
                       events=[],event_no=0,observations=[],review=None,result=None,invalidation=invalidation,invalidation_trigger=None,sent=False,_cancel=threading.Event())
+        if first and first['mode']=='CANDLE' and closed(initial):self.run['_last_closed_snapshot']=dict(index=0,timeframe=first['timeframe'],candle=copy.deepcopy(closed(initial)[-1]))
         self.run['demo']=bool(initial.get('demo'))
         self.run['message']=f'Server monitoring · {"DEMO" if self.run["demo"] else "LIVE"} ORDER ARMED · {symbol} · AUTO settings frozen at Start; tracked swing levels may update.' if action=='AUTO' else self.run['message']
         self._event('Started',f'{len(sequence.rows)} conditions · {action} · local server monitoring. Frozen settings from Start.')
@@ -126,7 +128,7 @@ class ConditionRun:
             run['_preserve_for_restart']=False;self._event('Stopped','Explicit Stop dismissed the stopped setup.');return self.status()
         if run['phase']=='stopped' and run.get('interruption') and run['interruption'].get('enabled'):
             run['interruption'].update(enabled=False,ready=False);self._event('Recovery checks ended','Explicit Stop or replacement ended connection recovery checks.');return self.status()
-        if run['phase'] in ('running','review') or run['phase']=='finishing' and not run['sent']:
+        if run['phase'] in ('running','paused','resuming','review') or run['phase']=='finishing' and not run['sent']:
             run['_cancel'].set()
             if run.get('review'):self.terminal.previews.pop(run['review']['preview'],None)
             run['review']=None;self._finish(body.get('reason') or 'Stopped by user. Already submitted orders remain in MT5.','stopped');run['_preserve_for_restart']=False
@@ -164,9 +166,55 @@ class ConditionRun:
         stale=getattr(error,'quote_time',None);gap=max(0,now-observed,now-last if finite(last) else 0,now-stale if finite(stale) else 0)
         kind=getattr(error,'kind','connection')
         cause='Server polling gap detected; laptop sleep or a scheduling interruption is possible.' if kind=='poll_gap' else 'Quotes stopped updating; the market may be closed or MT5 disconnected.' if kind=='stale_quote' else 'MT5 market data is unavailable; a connection interruption is possible.'
+        if kind=='missed_candles':cause='A required candle closed during the quote pause. Missed signals were not replayed.'
+        elif str(error)=='Quote recovery window expired.':cause='Fresh quotes did not return within the 2-minute recovery window.'
         run['interruption']=dict(enabled=True,kind=kind,detected_at=int(now*1000),last_quote_time=last,last_observed_at=observed,gap_seconds=gap,stale_quote_time=stale if finite(stale) else None,detail=str(error),ready=False,checked_at=None,recovered_at=None,recovery_message='Waiting for fresh quotes on the same account.')
         run['phase']='stopped';run['message']=f'Interrupted: {cause} Data/monitoring gap about {gap:.0f}s. No order sent. Review and explicitly restart; missed signals are not replayed.'
         self._event('Monitoring interrupted',run['message'])
+
+    def _pause_quote(self,error):
+        run=self.run
+        if run['phase']!='running' or run['attempted'] or run.get('sent') or run.get('review') or error.kind!='stale_quote' or not finite(error.quote_time) or error.quote_time>=self.clock()-30:
+            self._interrupt(error);return
+        now=self.clock();run['quote_pause']=dict(detected_at=int(now*1000),deadline=now+120,last_quote_time=run.get('last_quote_time'))
+        run['phase']='paused';run['message']='Paused: quote is over 30 seconds old. Orders and condition evaluation are blocked; waiting up to 2 minutes for fresh quotes.'
+        self._event('Quote pause',run['message'])
+
+    def _tick_quote_pause(self):
+        run=self.run;pause=run['quote_pause'];now=self.clock()
+        if run['_cancel'].is_set():self.stop();return
+        if now-run['last_poll']>30:self._interrupt(MonitorInterruption('Server polling gap during quote pause.','poll_gap'));return
+        run['last_poll']=now
+        if now>=pause['deadline']:self._interrupt(MonitorInterruption('Quote recovery window expired.','stale_quote',pause['last_quote_time']));return
+        sequence=run['sequence'];step=sequence.rows[sequence.index] if not sequence.done else None;confirmation=run.get('retest_confirmation')
+        if confirmation and now>=confirmation['expires']:
+            self._finish('Retest confirmation expired during quote pause. No order sent. Start explicitly for a new setup.','skipped');return
+        frame=confirmation['timeframe'] if confirmation else step['timeframe'] if step and step['mode']=='CANDLE' else 'M1'
+        try:
+            data=self._market(frame)
+            if not all(finite(data.get(key)) and data[key]>0 for key in ('bid','ask')) or data['bid']>data['ask']:raise ValueError('Broker quote is invalid.')
+            if self._check_invalidation(data):return
+            if finite(pause.get('last_quote_time')) and data['quote_time']<=pause['last_quote_time']:
+                run['message']='Paused: waiting for a newer fresh quote timestamp. No orders or evaluation.';return
+            if confirmation or step and step['mode']=='CANDLE':
+                expected=confirmation['last_candle'] if confirmation else getattr(sequence.tracker,'last_time',None) if sequence.tracker is not None else sequence.candle
+                history=closed(data)
+                if expected is None or not history or history[-1]['time']!=expected or not any(bar['time']==expected for bar in history):
+                    self._interrupt(MonitorInterruption('Required closed candle changed during quote pause; missed signals will not be replayed.','missed_candles'));return
+            gap=data['quote_time']-sequence.last_time if sequence.last_time is not None else 0
+            timed_out=sequence.started is not None and sequence.timeout>0 and data['quote_time']-sequence.started>sequence.timeout
+            if not sequence.done and (sequence.gap>0 and gap>sequence.gap or timed_out):
+                sequence.reset();run['observations'].append(dict(type='reset',reason='timeout' if timed_out else 'quote-gap',seconds=gap,observed_at=int(now*1000),bid=data['bid']))
+                self._event('Progress reset','Configured timeout or quote-gap reset elapsed during the pause.')
+            # Do not infer live crossings/sweeps from the unobserved price path.
+            sequence.previous=data['bid'];sequence.memory={};sequence.last_time=data['quote_time']
+            run['last_quote_time']=data['quote_time'];run['last_observed_at']=now;run['quote_pause']=None;run['phase']='running'
+            run['message']='Fresh quotes restored. Checks passed; monitoring resumes on the next poll. No order evaluated on the recovery poll.'
+            self._event('Quote resumed',run['message'])
+        except MonitorInterruption as error:
+            if error.kind!='stale_quote' or not finite(error.quote_time) or error.quote_time>now+5:self._interrupt(error)
+            else:run['message']=f"Paused: waiting for fresh quotes · {max(0,int(pause['deadline']-now))}s recovery time left. No orders or condition evaluation."
+        except Exception as error:self._finish('Stopped: quote recovery checks failed. '+str(error)+' Review and explicitly restart.','stopped')
 
     def recovery(self):
         run=self.run;info=run.get('interruption')
@@ -228,7 +276,7 @@ class ConditionRun:
 
     def before_submission(self,body):
         run=self.run
-        if not run or run['phase']!='review' or body.get('preview')!=run['review']['preview'] or not run['invalidation']['enabled']:return
+        if not run or run['phase']!='review' or body.get('preview')!=run['review']['preview']:return
         if self.clock()-run['last_poll']>30:
             self._interrupt(MonitorInterruption('Monitoring interruption before confirmation.','poll_gap'))
             raise ValueError('Setup monitoring was interrupted. No order sent.')
@@ -240,10 +288,11 @@ class ConditionRun:
     def tick(self):
         run=self.run
         if not run:return
+        if run['phase']=='paused':self._tick_quote_pause();return
         if run['phase']=='review':
             if self.clock()>=run['review_deadline']:
                 self.terminal.previews.pop(run['review']['preview'],None);run['review']=None;self._finish('Finished: condition review expired. Start explicitly for a new setup.')
-            elif run['invalidation']['enabled']:
+            else:
                 try:
                     if self.clock()-run['last_poll']>30:self._interrupt(MonitorInterruption('Server monitoring interruption during review.','poll_gap'));return
                     data=self._market('M1');run['last_poll']=self.clock();run['last_quote_time']=data['quote_time'];run['last_observed_at']=self.clock();self._check_invalidation(data)
@@ -262,6 +311,7 @@ class ConditionRun:
             run['last_quote_time']=data['quote_time'];run['last_observed_at']=self.clock()
             if self._check_invalidation(data):return
             candles=closed(data) if step and step['mode']=='CANDLE' else []
+            if candles:self.run['_last_closed_snapshot']=dict(index=sequence.index,timeframe=step['timeframe'],candle=copy.deepcopy(candles[-1]))
             if sequence.done:
                 if self._confirmation_ready(data):self._complete(data)
                 return
@@ -276,7 +326,7 @@ class ConditionRun:
             if complete:
                 if self._confirmation_ready(data):self._complete(data)
             else:run['message']=f'Server monitoring · {"AUTO ORDER ARMED" if run["action"]=="AUTO" else "Review preparation" if run["action"]=="REVIEW" else "Alerts only"} · {run["symbol"]} · step {sequence.index+1} of {len(sequence.rows)}'+(' · '+sequence.structure_state['status'] if sequence.structure_state else '')+'. Settings frozen at Start; tracked swing levels may update. Continues while the browser is hidden.'
-        except MonitorInterruption as error:self._interrupt(error)
+        except MonitorInterruption as error:self._pause_quote(error)
         except EntryQualitySkipped as error:
             run['sent']=False;run['review']=None;self._finish(str(error)+' Start explicitly for a new setup.','skipped')
         except ConditionInvalidated as error:
@@ -295,13 +345,13 @@ class ConditionRun:
             if not signal:raise EntryQualitySkipped('Retest confirmation requires an observed matching BOS/MS break.')
             frame=run['rows'][signal['index']]['timeframe'];history=closed(self._market(frame))
             if not history:raise EntryQualitySkipped('Confirmation candle history unavailable.')
-            state=dict(level=signal['structure']['level'],direction=direction,timeframe=frame,last_candle=history[-1]['time'],expires=self.clock()+plan['expiry']*60,touched=False)
+            state=dict(level=signal['structure']['level'],direction=direction,timeframe=frame,last_candle=history[-1]['time'],last_bar=copy.deepcopy(history[-1]),expires=self.clock()+plan['expiry']*60,touched=False)
             run['retest_confirmation']=state;self._event('Waiting retest','Conditions passed; waiting for a future retest and rejection close.')
         if self.clock()>=state['expires']:raise EntryQualitySkipped('Retest confirmation expired without entry.')
         history=closed(self._market(state['timeframe']));newer=[bar for bar in history if bar['time']>state['last_candle']]
         if len(newer)>1:raise EntryQualitySkipped('Confirmation candles were missed. Start again; no signal replay.')
         if newer:
-            bar=newer[0];state['last_candle']=bar['time'];buy=state['direction']==1
+            bar=newer[0];state['last_candle']=bar['time'];state['last_bar']=copy.deepcopy(bar);buy=state['direction']==1
             if (bar['low']<=state['level'] if buy else bar['high']>=state['level']):state['touched']=True
             rejected=bar['close']>state['level'] and bar['close']>bar['open'] if buy else bar['close']<state['level'] and bar['close']<bar['open']
             if state['touched'] and rejected:
@@ -373,12 +423,12 @@ class ConditionRun:
 
 class ConditionMonitor:
     """Registry of independent runners; all broker work shares one API lock."""
-    ACTIVE=('running','review','finishing')
-    def __init__(self,terminal,lock,clock=time.time,interval=2,storage_path=None,keep_awake=None):
+    ACTIVE=('running','paused','resuming','review','finishing')
+    def __init__(self,terminal,lock,clock=time.time,interval=2,storage_path=None,keep_awake=None,resume_policy=None):
         self.terminal=terminal;self.lock=lock;self.clock=clock;self.interval=interval
         self.runners={};self.estimates={};self.requests={};self.latest=None;self.generation=0;self.registry_id=secrets.token_hex(16);self.snapshot_revision=0
         self.shutdown=threading.Event();self.thread=None;self._closing=False;self.storage_warning='';self._store_signature=None;self._store_load_blocked=False;self._journal_sync_at=-float('inf');self.journal_sync=None
-        self.keep_awake=keep_awake
+        self.keep_awake=keep_awake;self.resume_policy=resume_policy or RestartPolicy();self.resume_warning=''
         self.store=MonitorStore(storage_path) if storage_path is not None else None
         self._load_saved()
 
@@ -407,17 +457,20 @@ class ConditionMonitor:
         self.keep_awake.configure(body.get('enabled'));return self.status()
 
     def begin_shutdown(self):
-        # Keep the last durable configurations; shutdown cancellation is not a
-        # user request to remove setups from next startup's review list.
-        self._closing=True;self.shutdown.set();self.signal_stop({'all':True})
-        if self.keep_awake:self.keep_awake.close()
+        self.shutdown.set()
+        with self.lock:
+            if self._closing:return
+            try:self._persist(strict=True,records=self._records(for_restart=True))
+            except Exception:pass # No durable handoff means no automatic resume.
+            self._closing=True;self.signal_stop({'all':True})
+            if self.keep_awake:self.keep_awake.close()
 
     def close(self):
         self.begin_shutdown()
         if self.thread:self.thread.join()
         with self.lock:self.stop({'all':True,'reason':'Stopped: TradeTrace server is shutting down.'},persist=False)
 
-    def _records(self,runners=None,exclude=None):
+    def _records(self,runners=None,exclude=None,for_restart=False):
         records=[]
         for key,runner in (self.runners if runners is None else runners).items():
             if key==exclude:continue
@@ -431,6 +484,9 @@ class ConditionMonitor:
             records.append(dict(id=run['id'],name=run.get('name',''),account=run['account'],server=run['server'],demo=run['demo'],symbol=run['symbol'],settings=copy.deepcopy(run['settings']),rows=copy.deepcopy(run['rows']),
                                group=run.get('group',''),group_policy=run.get('group_policy','ALL'),invalidation=copy.deepcopy(run['invalidation']),started=run['started'],
                                previous_phase=prior.get('previous_phase',run['phase']),uncertain=uncertain or bool(prior.get('uncertain')),request_id=run.get('request_id'),fingerprint=request[0] if request else prior.get('fingerprint')))
+            if for_restart and self.resume_policy.enabled and not uncertain:
+                progress=checkpoint(run,records[-1],self.clock(),secrets.token_hex(16))
+                if progress is not None:records[-1]['restart']=progress
             if historical:
                 records[-1]['history']=dict(phase=run['phase'],result=copy.deepcopy(run.get('result')),message=run.get('message',''),sent=bool(run.get('sent')),attempted=bool(run.get('attempted')),index=run['sequence'].index)
         active_ids={key for key,runner in (self.runners if runners is None else runners).items() if runner.run['phase'] in self.ACTIVE}
@@ -456,14 +512,20 @@ class ConditionMonitor:
         if not self.store:return
         try:data=self.store.load()
         except Exception as error:self._store_load_blocked=True;self.storage_warning='Saved setups could not be loaded; the original file is preserved. '+str(error);return
-        failures=0
+        failures=0;recorded_submission_ids=set()
         journal=getattr(getattr(self.terminal,'bridge',None),'journal',None)
         if journal and hasattr(journal,'monitor_history_records'):
             try:
                 known={record.get('id') for record in data['records'] if isinstance(record,dict)}
-                recovered=[record for record in journal.monitor_history_records() if record['id'] not in known]
+                journal_records=journal.monitor_history_records();recorded_submission_ids={record['id'] for record in journal_records}
+                recovered=[record for record in journal_records if record['id'] not in known]
                 data['records']=(recovered+data['records'])[-100:]
             except Exception as error:self.storage_warning='Journal setup recovery unavailable: '+str(error)
+        claimed={}
+        try:claimed=consume_checkpoints(self.store,data['records'],self.clock())
+        except Exception as error:
+            self.resume_warning='Restart checkpoint could not be consumed; setups remain disarmed. '+str(error)
+            self._store_load_blocked=True;self.storage_warning=self.resume_warning
         for record in data['records']:
             try:
                 if not isinstance(record,dict):raise ValueError('Invalid record.')
@@ -492,11 +554,64 @@ class ConditionMonitor:
                     index=history.get('index',len(sequence.rows))
                     if not isinstance(index,int) or not 0<=index<=len(sequence.rows):raise ValueError('Invalid saved progress.')
                     sequence.index=index
+                if history is None and self.resume_policy.enabled and rid in claimed and not saved['uncertain']:
+                    try:
+                        if rid in recorded_submission_ids:
+                            saved['uncertain']=True;raise ValueError('A submitted execution for this setup is already in the journal. Check MT5.')
+                        snap=claimed[rid]
+                        if not all(finite(snap.get(key)) and 0<=self.clock()-snap[key]<=MAX_RESTART_GAP for key in ('captured_at','last_observed_at','last_quote_time')):raise ValueError('Restart gap is over 30 seconds or timestamps changed.')
+                        restored,observations,confirmation=restore_sequence(record,snap)
+                        if sum(item.run['phase']=='resuming' for item in self.runners.values())>=20:raise ValueError('Automatic resume limit reached.')
+                        runner.run.update(phase='resuming',_restart_checkpoint=snap,_restart_sequence=restored,_restart_observations=observations,_restart_confirmation=confirmation,safe_resume=dict(state='checking',deadline=min(snap['last_observed_at'],snap['last_quote_time'])+MAX_RESTART_GAP),message='Checking clean-restart continuity. Orders are blocked until account, quotes, cancellation and candle checks pass.')
+                    except Exception as error:runner.run['message']='Saved—automatic resume blocked: '+str(error)+' Review and explicitly Start.'
                 runner.before_send=self._before_auto_send;runner._event('Restored history' if history is not None else 'Restored disarmed',runner.run['message']);self.runners[rid]=runner;self.latest=rid
                 request_id=record.get('request_id');fingerprint=record.get('fingerprint')
                 if isinstance(request_id,str) and 8<=len(request_id)<=100 and isinstance(fingerprint,str) and len(fingerprint)==64:self.requests[request_id]=(fingerprint,rid)
             except Exception:failures+=1
         if failures:self._store_load_blocked=True;self.store.read_error=True;self.storage_warning=f'{failures} saved setup(s) could not be loaded; valid setups were restored disarmed.'
+
+    def _disarm_resume(self,runner,reason):
+        run=runner.run;run['phase']='saved';run['safe_resume']=dict(state='blocked',reason=reason)
+        run['message']='Saved—automatic resume blocked: '+reason+' Review and explicitly Start.'
+        for key in ('_restart_checkpoint','_restart_sequence','_restart_observations','_restart_confirmation'):run.pop(key,None)
+        runner._event('Restart resume blocked',run['message'])
+
+    def _try_resume(self,runner):
+        run=runner.run;now=self.clock();snap=run['_restart_checkpoint'];sequence=run['_restart_sequence'];confirmation=run.get('_restart_confirmation')
+        if not self.resume_policy.enabled:self._disarm_resume(runner,'Automatic resume was disabled.');return
+        if now>=run['safe_resume']['deadline']:self._disarm_resume(runner,'Restart gap exceeded 30 seconds or MT5 was not ready.');return
+        if run['_cancel'].is_set():self._disarm_resume(runner,'The setup was stopped.');return
+        step=sequence.rows[sequence.index] if not sequence.done else None
+        frame=confirmation['timeframe'] if confirmation else step['timeframe'] if step and step['mode']=='CANDLE' else 'M1'
+        try:
+            data=runner._market(frame)
+            if not all(finite(data.get(key)) and data[key]>0 for key in ('bid','ask')) or data['bid']>data['ask']:raise ValueError('Broker quote is invalid.')
+            if data['quote_time']<=snap['last_quote_time']:return
+            if runner._guard_hit(run['invalidation'],data['bid']):raise ValueError('Frozen cancellation level has been reached.')
+            if sequence.timeout>0 and sequence.started is not None and data['quote_time']-sequence.started>sequence.timeout:raise ValueError('Sequence timeout expired during restart.')
+            if sequence.gap>0 and sequence.last_time is not None and data['quote_time']-sequence.last_time>sequence.gap:raise ValueError('Configured quote-gap reset elapsed during restart.')
+            if confirmation and now>=confirmation['expires']:raise ValueError('Retest confirmation window expired.')
+            if confirmation or step and step['mode']=='CANDLE':
+                expected=confirmation['last_candle'] if confirmation else getattr(sequence.tracker,'last_time',None) if sequence.tracker else sequence.candle
+                bars=closed(data)
+                if expected is None or not bars or bars[-1]['time']!=expected or not any(bar['time']==expected for bar in bars):raise ValueError('A required closed candle was missed or history changed.')
+                recorded=snap.get('continuity_candle')
+                if not isinstance(recorded,dict) or any(bars[-1].get(key)!=recorded.get(key) for key in ('time','open','high','low','close')):raise ValueError('The last observed closed candle was revised or cannot be verified.')
+                run['_last_closed_snapshot']=dict(index=sequence.index,timeframe=frame,candle=copy.deepcopy(bars[-1]))
+            sequence.previous=data['bid'];sequence.memory={};sequence.last_time=data['quote_time']
+            run.update(sequence=sequence,observations=run['_restart_observations'],retest_confirmation=confirmation,phase='running',saved=None,last_poll=now,last_quote_time=data['quote_time'],last_observed_at=now,safe_resume=dict(state='resumed',at=int(now*1000)),message='Resumed after a clean server restart. Progress retained; live sampling re-baselined. No entry evaluated on the recovery poll.')
+            for key in ('_restart_checkpoint','_restart_sequence','_restart_observations','_restart_confirmation'):run.pop(key,None)
+            runner._event('Restart resumed',run['message'])
+        except MonitorInterruption as error:run['message']='Checking restart: '+str(error)+' Orders remain blocked until the 30-second window expires.'
+        except Exception as error:self._disarm_resume(runner,str(error))
+
+    def configure_restart_resume(self,body):
+        if self.shutdown.is_set():raise ValueError('Server is shutting down.')
+        self.resume_policy.configure(body.get('enabled'))
+        if not self.resume_policy.enabled:
+            for runner in self.runners.values():
+                if runner.run['phase']=='resuming':self._disarm_resume(runner,'Automatic resume was disabled.')
+        return self.status()
 
     def _before_auto_send(self,runner):
         if self.shutdown.is_set() or runner.run['_cancel'].is_set():raise ValueError('Server is stopping. No order was sent.')
@@ -511,7 +626,7 @@ class ConditionMonitor:
         body=body or {};selected=body.get('id',self.latest)
         runs=[runner.status()['run'] for runner in self.runners.values()]
         self.snapshot_revision+=1
-        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning,journal_sync=copy.deepcopy(self.journal_sync),keep_awake=self._sync_keep_awake())
+        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning,journal_sync=copy.deepcopy(self.journal_sync),keep_awake=self._sync_keep_awake(),restart_resume=dict(enabled=self.resume_policy.enabled,max_gap_seconds=MAX_RESTART_GAP,checking=sum(runner.run['phase']=='resuming' for runner in self.runners.values()),error=self.resume_policy.error or self.resume_warning))
 
     def start(self,body):
         if self.shutdown.is_set():raise ValueError('The server is shutting down. No new setup was started.')
@@ -595,6 +710,7 @@ class ConditionMonitor:
 
     def _tick(self):
         for runner in list(self.runners.values()):
+            if runner.run['phase']=='resuming':self._try_resume(runner);continue
             if runner.run['phase'] not in self.ACTIVE:continue
             try:runner.tick()
             except Exception as error:runner._finish('Stopped: monitoring failed. '+str(error)+' Check MT5.','stopped')
@@ -629,6 +745,7 @@ class ConditionMonitor:
         return next((runner for runner in self.runners.values() if runner.run['phase']=='review' and runner.run.get('review',{}).get('preview')==body.get('preview')),None)
 
     def before_submission(self,body):
+        if self.shutdown.is_set():raise ValueError('Server is stopping; order review cannot send.')
         runner=self._review_runner(body)
         if runner:
             runner.before_submission(body)
