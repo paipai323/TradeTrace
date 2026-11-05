@@ -374,10 +374,11 @@ class ConditionRun:
 class ConditionMonitor:
     """Registry of independent runners; all broker work shares one API lock."""
     ACTIVE=('running','review','finishing')
-    def __init__(self,terminal,lock,clock=time.time,interval=2,storage_path=None):
+    def __init__(self,terminal,lock,clock=time.time,interval=2,storage_path=None,keep_awake=None):
         self.terminal=terminal;self.lock=lock;self.clock=clock;self.interval=interval
         self.runners={};self.estimates={};self.requests={};self.latest=None;self.generation=0;self.registry_id=secrets.token_hex(16);self.snapshot_revision=0
         self.shutdown=threading.Event();self.thread=None;self._closing=False;self.storage_warning='';self._store_signature=None;self._store_load_blocked=False;self._journal_sync_at=-float('inf');self.journal_sync=None
+        self.keep_awake=keep_awake
         self.store=MonitorStore(storage_path) if storage_path is not None else None
         self._load_saved()
 
@@ -391,13 +392,25 @@ class ConditionMonitor:
         self.thread=threading.Thread(target=self._loop,name='condition-monitors',daemon=True);self.thread.start()
 
     def _loop(self):
-        while not self.shutdown.wait(self.interval):
-            with self.lock:self.tick()
+        try:
+            while not self.shutdown.wait(self.interval):
+                with self.lock:self.tick()
+        finally:
+            if self.keep_awake:self.keep_awake.close()
+
+    def _sync_keep_awake(self):
+        if self.keep_awake:return self.keep_awake.update(0 if self._closing else sum(runner.run['phase'] in self.ACTIVE for runner in self.runners.values()))
+        return dict(enabled=False,requested=False,needed=0,state='unavailable',power_source='unknown',message='Keep-awake protection not configured.')
+
+    def configure_keep_awake(self,body):
+        if not self.keep_awake:raise ValueError('Keep-awake protection not configured.')
+        self.keep_awake.configure(body.get('enabled'));return self.status()
 
     def begin_shutdown(self):
         # Keep the last durable configurations; shutdown cancellation is not a
         # user request to remove setups from next startup's review list.
         self._closing=True;self.shutdown.set();self.signal_stop({'all':True})
+        if self.keep_awake:self.keep_awake.close()
 
     def close(self):
         self.begin_shutdown()
@@ -498,7 +511,7 @@ class ConditionMonitor:
         body=body or {};selected=body.get('id',self.latest)
         runs=[runner.status()['run'] for runner in self.runners.values()]
         self.snapshot_revision+=1
-        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning,journal_sync=copy.deepcopy(self.journal_sync))
+        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning,journal_sync=copy.deepcopy(self.journal_sync),keep_awake=self._sync_keep_awake())
 
     def start(self,body):
         if self.shutdown.is_set():raise ValueError('The server is shutting down. No new setup was started.')
@@ -576,6 +589,11 @@ class ConditionMonitor:
                 runner.stop({'reason':f'Stopped: linked setup “{run["name"]}” '+('had an uncertain submission; check MT5.' if uncertain else 'submitted an entry. First entry stops this group.')})
 
     def tick(self):
+        self._sync_keep_awake()
+        try:self._tick()
+        finally:self._sync_keep_awake()
+
+    def _tick(self):
         for runner in list(self.runners.values()):
             if runner.run['phase'] not in self.ACTIVE:continue
             try:runner.tick()

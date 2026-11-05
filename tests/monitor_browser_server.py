@@ -11,6 +11,7 @@ from types import SimpleNamespace as Row
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import server
 from condition_monitor import ConditionMonitor
+from keep_awake import KeepAwake
 from entry_quality import check_quality
 
 
@@ -50,7 +51,17 @@ class FakeTerminal:
         return dict(retcode=10009,comment='Fake broker execution',order=str(len(self.sent)),deal=str(len(self.sent)),volume=float(saved['volume']),price=self.bid+.0001,operation='open' if saved['order_kind']=='MARKET' else 'pending',requested_price=saved.get('price'),journal_recorded=True,message='Fake broker only')
 
 
-terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1,storage_path=os.environ.get('TRADETRACE_TEST_MONITOR_STORE'))
+class FakePower:
+    def __init__(self):self.source='ac';self.failure=False;self.held=False
+    def acquire(self):
+        if self.failure:raise OSError('Test power request unavailable')
+        self.held=True
+    def release(self):self.held=False
+    def power_source(self):return self.source
+
+power=FakePower();saved_path=os.environ.get('TRADETRACE_TEST_MONITOR_STORE')
+awake=KeepAwake(Path(saved_path).with_name('keep-awake.json') if saved_path else None,backend=power)
+terminal=FakeTerminal();server.terminal=terminal;server.condition_monitor=ConditionMonitor(terminal,server.api_lock,interval=.1,storage_path=saved_path,keep_awake=awake)
 
 
 class Handler(server.Handler):
@@ -71,6 +82,8 @@ class Handler(server.Handler):
             if 'quote_age' in body:terminal.quote_age=body['quote_age']
             if 'poll_gap' in body and server.condition_monitor.run:
                 run=server.condition_monitor.run;run['last_poll']=run['last_observed_at']=run['last_quote_time']=time.time()-body['poll_gap']
+            if 'power_source' in body:power.source=body['power_source']
+            if 'power_failure' in body:power.failure=body['power_failure']
             if 'orders' in body:terminal.fixture_orders=body['orders']
             if 'bid' in body:terminal.bid=body['bid']
             if 'account' in body:terminal.account=body['account']

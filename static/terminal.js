@@ -761,6 +761,19 @@
   el('conditions-panel').addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.tagName==='INPUT')event.preventDefault();});
   const monitorEstimates=new Map(),monitorEstimateOpen=new Set();let monitorEstimateBusy='';
   let serverRegistryId='',serverSnapshotRevision=-1,serverMonitors=[],selectedMonitorId=null,serverMonitor=null,serverPollBusy=false,serverReviewShown='',serverStateKey='',serverDetachedId='';
+  let keepAwakeState=null,keepAwakeBusy=false;
+  function renderKeepAwake(value){
+    if(value)keepAwakeState=value;const state=keepAwakeState;if(!state)return;
+    const input=el('keep-awake-enabled');input.checked=state.enabled;input.disabled=keepAwakeBusy||['unavailable','closed'].includes(state.state);
+    const node=el('keep-awake-status'),message=state.message+(state.preference_error?' '+state.preference_error:'');if(node.textContent!==message)node.textContent=message;node.dataset.state=state.state;
+    const label=({active:'Keeping PC awake',idle:'Sleep allowed',closed:'Awake request released',off:'Sleep protection off',battery:'Plug in · battery',unknown:'Awake · verify power',error:'Sleep protection issue',unavailable:'Protection unavailable',waiting:'Requesting awake'})[state.state]||'Awake status unknown';
+    const chip=el('awake-chip');if(chip.textContent!==label)chip.textContent=label;chip.title=message;chip.dataset.state=state.state;
+  }
+  el('awake-chip').onclick=()=>{showMonitorWorkspace();el('keep-awake-enabled').focus({preventScroll:true});el('keep-awake-status').scrollIntoView({block:'nearest'});};
+  el('keep-awake-enabled').onchange=async()=>{
+    const enabled=el('keep-awake-enabled').checked;keepAwakeBusy=true;el('keep-awake-enabled').disabled=true;el('keep-awake-error').hidden=true;
+    try{receiveServerConditions(await call('terminal/keep-awake',{enabled}));}catch(error){el('keep-awake-error').textContent='Keep-awake change not confirmed: '+error.message;el('keep-awake-error').hidden=false;}finally{keepAwakeBusy=false;renderKeepAwake();}
+  };
   function serverMonitorActive(){return !!serverMonitor&&['running','review','finishing'].includes(serverMonitor.phase);}
   function receiveServerConditions(payload){
     if(payload.journal_sync){const sync=payload.journal_sync;el('monitor-journal-sync').textContent=sync.error?'Automatic setup journal sync waiting: '+sync.error:sync.unsupported?'Automatic journal sync: some positions have incomplete history or scale-ins/partial closes unsupported by replay. Check MT5.':'Setup trades sync to journal automatically after closing. Open Journal to review or replay them.';}
@@ -770,6 +783,7 @@
       if(serverRegistryId&&payload.registry_id!==serverRegistryId){serverMonitors=[];monitorEstimates.clear();monitorEstimateOpen.clear();serverMonitor=null;selectedMonitorId=null;serverStateKey='';invalidate();}
       serverRegistryId=payload.registry_id;serverSnapshotRevision=payload.snapshot_revision;
     }
+    if(payload.keep_awake)renderKeepAwake(payload.keep_awake);
     if(Array.isArray(payload.runs)){serverMonitors=payload.runs;const ids=new Set(serverMonitors.map(run=>run.id));for(const id of monitorEstimates.keys())if(!ids.has(id)){monitorEstimates.delete(id);monitorEstimateOpen.delete(id);}}
     else if(payload.run){const index=serverMonitors.findIndex(r=>r.id===payload.run.id);if(index<0)serverMonitors.push(payload.run);else serverMonitors[index]=payload.run;}
     if(selectedMonitorId===null&&payload.run)selectedMonitorId=payload.run.id;
@@ -819,7 +833,7 @@
   async function pollServerConditions(){
     if(serverPollBusy)return;serverPollBusy=true;
     try{receiveServerConditions(await call('terminal/conditions/status',selectedMonitorId?{id:selectedMonitorId}:{}));}
-    catch(error){if(serverMonitorActive())conditionMessage('Server status unavailable. Monitoring status is unknown; verify the TradeTrace server and MT5. '+error.message);}
+    catch(error){el('awake-chip').textContent='Awake status unknown';el('awake-chip').dataset.state='error';el('awake-chip').title='Server status unavailable; protection cannot be verified.';el('keep-awake-status').dataset.state='error';el('keep-awake-status').textContent='Server status unavailable. Keep-awake protection cannot be verified.';if(serverMonitorActive())conditionMessage('Server status unavailable. Monitoring status is unknown; verify the TradeTrace server and MT5. '+error.message);}
     finally{serverPollBusy=false;}
   }
   async function stopServerConditions(reason='Stopped by user. Already submitted orders remain in MT5.'){

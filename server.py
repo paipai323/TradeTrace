@@ -14,18 +14,19 @@ from urllib.parse import urlparse
 from core import Bridge, running_terminals
 from terminal import Terminal
 from condition_monitor import ConditionMonitor
+from keep_awake import KeepAwake
 
 ROOT = Path(__file__).parent / 'static'
 bridge = Bridge()
 terminal = Terminal(bridge)
 token = secrets.token_urlsafe(32)
 api_lock = threading.RLock()
-condition_monitor = ConditionMonitor(terminal, api_lock, storage_path=Path(__file__).parent / '.local' / 'condition-setups.json')
+condition_monitor = ConditionMonitor(terminal, api_lock, storage_path=Path(__file__).parent / '.local' / 'condition-setups.json',keep_awake=KeepAwake(Path(__file__).parent / '.local' / 'keep-awake.json'))
 VERSION = '1.18.0'
 APP_ID = 'local-mt5-replay'
 APP_ROOT = Path(__file__).resolve().parent
 BUILD = hashlib.sha256(b''.join((APP_ROOT / f).read_bytes() for f in
-    ['monitor_store.py', 'condition_estimate.py', 'entry_quality.py', 'condition_engine.py', 'condition_monitor.py', 'timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/terminal-conditions.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
+    ['keep_awake.py', 'monitor_store.py', 'condition_estimate.py', 'entry_quality.py', 'condition_engine.py', 'condition_monitor.py', 'timeframes.py', 'terminal.py', 'static/terminal.js', 'static/terminal.css', 'static/terminal.html', 'static/terminal-analysis.js', 'static/terminal-conditions.js', 'static/vendor/lightweight-charts-5.0.9.js', 'server.py', 'core.py', 'credentials.py', 'journal.py', 'static/journal.js', 'static/journal.css', 'static/app.js', 'static/connection.js', 'static/index.html', 'static/style.css', 'native_history.py'])).hexdigest()[:12]
 
 
 def health():
@@ -119,6 +120,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length))
             if self.path == '/api/terminal/conditions/start':
                 result = condition_monitor.start(body)
+            elif self.path == '/api/terminal/keep-awake':
+                result = condition_monitor.configure_keep_awake(body)
             elif self.path == '/api/terminal/conditions/recovery':
                 result = condition_monitor.recovery(body)
             elif self.path == '/api/terminal/conditions/estimate':
