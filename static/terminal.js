@@ -769,7 +769,7 @@
     const label=({active:'Keeping PC awake',idle:'Sleep allowed',closed:'Awake request released',off:'Sleep protection off',battery:'Plug in · battery',unknown:'Awake · verify power',error:'Sleep protection issue',unavailable:'Protection unavailable',waiting:'Requesting awake'})[state.state]||'Awake status unknown';
     const chip=el('awake-chip');if(chip.textContent!==label)chip.textContent=label;chip.title=message;chip.dataset.state=state.state;
   }
-  el('awake-chip').onclick=()=>{showMonitorWorkspace();el('keep-awake-enabled').focus({preventScroll:true});el('keep-awake-status').scrollIntoView({block:'nearest'});};
+  el('awake-chip').onclick=()=>{if(monitorFilter==='results')el('monitor-filters').querySelector('[data-monitor-filter=all]').click();showMonitorWorkspace();el('keep-awake-enabled').focus({preventScroll:true});el('keep-awake-status').scrollIntoView({block:'nearest'});};
   el('keep-awake-enabled').onchange=async()=>{
     const enabled=el('keep-awake-enabled').checked;keepAwakeBusy=true;el('keep-awake-enabled').disabled=true;el('keep-awake-error').hidden=true;
     try{receiveServerConditions(await call('terminal/keep-awake',{enabled}));}catch(error){el('keep-awake-error').textContent='Keep-awake change not confirmed: '+error.message;el('keep-awake-error').hidden=false;}finally{keepAwakeBusy=false;renderKeepAwake();}
@@ -1553,7 +1553,7 @@
   let monitorFilter='all',monitorOpener=null,historyPage=0;
   let historyFilters={search:'',symbol:'',status:'',period:'0'};
   const monitorDetailsOpen=new Set();
-  try{const saved=JSON.parse(localStorage.getItem('tradetrace.monitorView')||'{}');if(['all','active','attention','history'].includes(saved.filter))monitorFilter=saved.filter;if(saved.history&&typeof saved.history==='object')for(const key of Object.keys(historyFilters))if(typeof saved.history[key]==='string')historyFilters[key]=saved.history[key];for(const id of (Array.isArray(saved.expanded)?saved.expanded:[]).slice(0,100))if(typeof id==='string')monitorDetailsOpen.add(id);}catch(_){}
+  try{const saved=JSON.parse(localStorage.getItem('tradetrace.monitorView')||'{}');if(['all','active','attention','history','results'].includes(saved.filter))monitorFilter=saved.filter;if(saved.history&&typeof saved.history==='object')for(const key of Object.keys(historyFilters))if(typeof saved.history[key]==='string')historyFilters[key]=saved.history[key];for(const id of (Array.isArray(saved.expanded)?saved.expanded:[]).slice(0,100))if(typeof id==='string')monitorDetailsOpen.add(id);}catch(_){}
   function saveMonitorView(){try{localStorage.setItem('tradetrace.monitorView',JSON.stringify({filter:monitorFilter,history:historyFilters,expanded:[...monitorDetailsOpen].slice(-100)}));}catch(_){}}
   for(const item of el('monitor-filters').querySelectorAll('button'))item.setAttribute('aria-pressed',String(item.dataset.monitorFilter===monitorFilter));
   for(const key of ['search','status','period'])el('history-'+key).value=historyFilters[key];
@@ -1561,7 +1561,7 @@
   el('history-clear').onclick=()=>{historyFilters={search:'',symbol:'',status:'',period:'0'};for(const key of Object.keys(historyFilters))el('history-'+key).value=historyFilters[key];historyPage=0;saveMonitorView();renderMonitorList();};
   el('history-prev').onclick=()=>{historyPage=Math.max(0,historyPage-1);renderMonitorList();};el('history-next').onclick=()=>{historyPage++;renderMonitorList();};
   el('monitor-toolbar').onclick=()=>showMonitorWorkspace();
-  for(const button of el('monitor-filters').querySelectorAll('button'))button.onclick=()=>{monitorFilter=button.dataset.monitorFilter;for(const item of el('monitor-filters').querySelectorAll('button'))item.setAttribute('aria-pressed',String(item===button));saveMonitorView();renderMonitorList();};
+  for(const button of el('monitor-filters').querySelectorAll('button'))button.onclick=()=>{monitorFilter=button.dataset.monitorFilter;if(monitorFilter==='results')loadSetupResults();for(const item of el('monitor-filters').querySelectorAll('button'))item.setAttribute('aria-pressed',String(item===button));saveMonitorView();renderMonitorList();};
   function monitorDisplayName(run){
     const side=run.settings.ticket.side,legacy=`${run.symbol} ${side} #`,name=run.name||'';
     if(name&&!((name.startsWith(legacy)&&/^\d+$/.test(name.slice(legacy.length)))||name===run.symbol+' saved setup'))return name;
@@ -1569,6 +1569,7 @@
     return `${run.symbol} · ${side==='BUY'?'Buy':'Sell'} after ${row?.mode==='CANDLE'?row.timeframe+' ':''}${rule}${run.rows.length>1?' + '+(run.rows.length-1)+' more':''}`;
   }
   function showMonitorWorkspace(){
+    if(monitorFilter==='results'&&!setupResultsModel)loadSetupResults();
     if(el('monitor-workspace').hidden)monitorOpener=document.activeElement;
     const panel=el('monitor-workspace');panel.hidden=false;panel.classList.add('is-expanded');el('monitors-panel').open=true;
     el('monitor-workspace-close').focus({preventScroll:true});
@@ -1577,10 +1578,45 @@
   function hideMonitorWorkspace(){el('monitor-workspace').hidden=true;el('monitor-workspace').classList.remove('is-expanded');if(monitorOpener?.isConnected)monitorOpener.focus({preventScroll:true});}
   el('monitor-workspace-close').onclick=hideMonitorWorkspace;
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!el('setup-builder').open&&!el('monitor-workspace').hidden)hideMonitorWorkspace();});
+
+  let setupResultsModel=null,setupResultsBusy=false,setupResultsError='',setupResultsLoaded='';
+  async function loadSetupResults(account){
+    if(setupResultsBusy)return;setupResultsBusy=true;setupResultsError='';renderSetupResults();
+    try{
+      setupResultsModel=await call('journal/overview',account?{account}:setupResultsModel?.account?{account:setupResultsModel.account}:{});
+      const select=el('results-account');select.replaceChildren(...setupResultsModel.accounts.map(row=>new Option(`${row.server} · ${row.login} · ${row.currency}`,row.id)));select.value=setupResultsModel.account||'';setupResultsLoaded=new Date().toLocaleTimeString();
+    }catch(error){setupResultsError=error.message;if(setupResultsModel)el('results-account').value=setupResultsModel.account||'';}
+    finally{setupResultsBusy=false;renderSetupResults();}
+  }
+  function renderSetupResults(){
+    const model=setupResultsModel,rows=model?.setup_results||[],account=model?.accounts.find(row=>row.id===model.account),currency=account?.currency||'';
+    el('results-refresh').disabled=setupResultsBusy;el('results-account').disabled=setupResultsBusy;
+    el('results-status').textContent=setupResultsError?'Results unavailable: '+setupResultsError+(model?' · previous results shown.':''):setupResultsBusy?'Loading journal results…':model?`Journal snapshot · refreshed ${setupResultsLoaded} · ${currency}`:'Select Results or Refresh results to load your journal.';
+    const summary=el('results-summary');summary.replaceChildren();
+    const current=serverMonitors.filter(run=>JSON.stringify([String(run.account),run.server])===model?.account);
+    for(const [label,items] of [['Pending',current.filter(monitorPending)],['Open',current.filter(run=>monitorTradeOutcome(run)?.state==='open')],['Skipped',current.filter(run=>run.phase==='skipped')]])summary.append(text('span',`${label}: ${items.length}`));
+    summary.append(text('span',`Closed linked trades: ${rows.length}`),text('p','Pending, open and skipped counts reflect retained monitoring records for this account. Refresh trade outcomes in Monitoring for current broker status.','terminal-muted'));
+    const measure=items=>{const known=items.filter(row=>Number.isFinite(row.net)),rs=items.filter(row=>Number.isFinite(row.r_multiple));return [items.length,known.filter(row=>row.net>0).length,known.filter(row=>row.net<0).length,known.filter(row=>row.net===0).length,known.length?(known.filter(row=>row.net>0).length/known.length*100).toFixed(1)+'%':'—',known.length?known.reduce((sum,row)=>sum+row.net,0).toFixed(2)+' '+currency:'—',rs.length?(rs.reduce((sum,row)=>sum+row.r_multiple,0)/rs.length).toFixed(2)+'R':'—',`${rs.length}/${items.length}`];};
+    const table=(titles,values)=>{const wrap=text('div','','terminal-results-table'),table=document.createElement('table'),head=document.createElement('thead'),tr=document.createElement('tr');for(const title of titles)tr.append(text('th',title));head.append(tr);table.append(head);const body=document.createElement('tbody');for(const valuesRow of values){const row=document.createElement('tr');for(const value of valuesRow){const td=document.createElement('td');if(value instanceof Node)td.append(value);else td.textContent=String(value);row.append(td);}body.append(row);}table.append(body);wrap.append(table);return wrap;};
+    const groups=new Map(),by=el('results-group').value;
+    for(const row of rows){const key=row[by]||'Unknown';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+    const host=el('results-groups');host.replaceChildren();
+    if(rows.length)host.append(table(['Group','Trades','Wins','Losses','Flat','Win rate','Net P/L','Avg R','R sample'],[['All linked trades',...measure(rows)],...[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([key,items])=>[key,...measure(items)])]));
+    else host.append(text('p','No linked closed setup trades in this journal account yet. Trades appear after closure and journal sync.'));
+    const trades=el('results-trades');trades.replaceChildren();
+    const waiting=current.map(run=>({run,state:monitorPending(run)?'Pending':monitorTradeOutcome(run)?.state==='open'?'Open':run.phase==='skipped'?'Skipped':null})).filter(item=>item.state);
+    if(waiting.length){trades.append(text('h4','Pending, open & skipped · retained setups'));trades.append(table(['Setup','Symbol','Status','Inspect'],waiting.map(({run,state})=>{const button=text('button','Open setup');button.type='button';button.disabled=run.scope!==scope;button.onclick=()=>openMonitoredSetup(run.id);return [monitorDisplayName(run),run.symbol,state,button];})));}
+
+    if(rows.length){trades.append(text('h4','Recent closed setup trades · latest 50'));trades.append(table(['Closed','Setup','Symbol','Result','R','Review'],rows.slice(0,50).map(row=>{const actions=text('div','','terminal-monitor-actions');for(const replay of [false,true]){const button=text('button',replay?'Replay':'Journal');button.type='button';button.onclick=async()=>{if(typeof allowJournalSwitch==='function'&&!allowJournalSwitch())return;button.disabled=true;try{await refreshJournal(model.account);document.getElementById('journal-search').value='';await openJournalTrade(row.position);hideMonitorWorkspace();showJournalView('journal');if(replay&&journalPosition===row.position)document.getElementById('journal-replay').click();}catch(error){el('results-status').textContent='Cannot open trade: '+error.message;}finally{button.disabled=false;}};actions.append(button);}return [new Date(row.end).toLocaleString(),row.name,row.symbol+' '+row.side,Number.isFinite(row.net)?row.net.toFixed(2)+' '+currency:'Unknown',Number.isFinite(row.r_multiple)?row.r_multiple.toFixed(2)+'R':'—',actions];})));}
+  }
+  el('results-refresh').onclick=()=>loadSetupResults();el('results-account').onchange=()=>loadSetupResults(el('results-account').value);el('results-group').onchange=renderSetupResults;
   function monitorTradeOutcome(run){const local=monitorOutcomes.get(run.id)?.value,remote=run.trade_outcome;return local&&(!remote||local.checked_at>=remote.checked_at)?local:remote;}
   function monitorPending(run){const state=monitorTradeOutcome(run)?.state;return run.result?.operation==='pending'&&[10008,10009,10010].includes(run.result.retcode)&&(!state||['pending','unknown'].includes(state));}
   function renderMonitorList(){
     renderMonitorHealth();
+    el('monitor-workspace').classList.toggle('is-results',monitorFilter==='results');
+    el('monitor-results').hidden=monitorFilter!=='results';el('monitor-list').hidden=monitorFilter==='results';
+    if(monitorFilter==='results')renderSetupResults();
     const pendingRuns=serverMonitors.filter(monitorPending);
     const active=serverMonitors.filter(r=>['running','paused','resuming','review','finishing'].includes(r.phase)),saved=serverMonitors.filter(r=>r.phase==='saved');el('monitor-count').textContent=`${active.length} active${saved.length?' · '+saved.length+' saved':''}${pendingRuns.length?' · '+pendingRuns.length+' pending':''}`;
     const attentionCount=serverMonitors.filter(r=>r.phase==='review'||r.phase==='saved'||(r.phase==='stopped'&&r.interruption?.enabled)).length;

@@ -12,6 +12,23 @@ import uuid
 CHECKS = {'planned', 'risk', 'entry', 'exit'}
 
 
+def setup_results(trades, entries):
+    """One immutable setup association per closed position; never infer unlinked trades."""
+    linked={str(trade['id']):trade for trade in trades};seen=set();results=[]
+    for item in entries:
+        pid=str(item.get('position') or '')
+        if pid in seen or pid not in linked:continue
+        trade=linked[pid];result=item.get('result') or {};setup=item.get('setup') or {}
+        if not trade.get('entry_order') or str(trade['entry_order'])!=str(result.get('order')):continue
+        seen.add(pid)
+        families=sorted({'BOS' if row.get('rule','').startswith('BOS') else 'MS' for row in setup.get('rows',[]) if row.get('rule','').startswith(('BOS','MS'))})
+        net=trade.get('net');risk=(setup.get('automatic_plan') or {}).get('modeled_loss')
+        valid_net=isinstance(net,(int,float)) and not isinstance(net,bool) and math.isfinite(net)
+        valid_r=valid_net and isinstance(risk,(int,float)) and not isinstance(risk,bool) and math.isfinite(risk) and risk>0
+        results.append(dict(position=pid,monitor_id=setup.get('monitor_id'),name=setup.get('name') or 'Unnamed setup',symbol=trade.get('symbol',''),side=trade.get('side',''),end=trade.get('end'),net=net if valid_net else None,r_multiple=net/risk if valid_r else None,family=' + '.join(families) or 'Other'))
+    return sorted(results,key=lambda row:row['end'] or 0,reverse=True)
+
+
 def setup_performance(trades, entries):
     linked={str(trade['id']):trade for trade in trades};seen=set();groups={}
     for item in entries:
@@ -97,7 +114,7 @@ class Journal:
             entries = [dict(id=row['id'], position=row['position'], created=row['created'], **json.loads(row['payload']))
                        for row in con.execute('SELECT * FROM condition_entries WHERE account=? ORDER BY created DESC LIMIT 200', (account,))]
             performance_entries=[dict(position=row['position'],**json.loads(row['payload'])) for row in con.execute('SELECT e.position,e.payload FROM condition_entries e JOIN trades t ON t.account=e.account AND t.position=e.position WHERE e.account=? ORDER BY e.created DESC',(account,))]
-        return dict(account=account, accounts=accounts, trades=trades, condition_entries=entries,setup_performance=setup_performance(trades,performance_entries))
+        return dict(account=account, accounts=accounts, trades=trades, condition_entries=entries,setup_performance=setup_performance(trades,performance_entries),setup_results=setup_results(trades,performance_entries))
 
     def entry(self, account, position):
         with self.db() as con:
