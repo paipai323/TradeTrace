@@ -626,7 +626,7 @@ class ConditionMonitor:
         body=body or {};selected=body.get('id',self.latest)
         runs=[runner.status()['run'] for runner in self.runners.values()]
         self.snapshot_revision+=1
-        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning,journal_sync=copy.deepcopy(self.journal_sync),keep_awake=self._sync_keep_awake(),restart_resume=dict(enabled=self.resume_policy.enabled,max_gap_seconds=MAX_RESTART_GAP,checking=sum(runner.run['phase']=='resuming' for runner in self.runners.values()),error=self.resume_policy.error or self.resume_warning))
+        return dict(run=next((run for run in runs if run['id']==selected),None),runs=runs,registry_id=self.registry_id,snapshot_revision=self.snapshot_revision,storage_warning=self.storage_warning,health=dict(checked_at=int(self.clock()*1000),restart_candidates=sum(checkpoint(self.runners[record['id']].run,record,self.clock(),'readiness') is not None for record in self._records() if self.runners[record['id']].run['phase']=='running')),journal_sync=copy.deepcopy(self.journal_sync),keep_awake=self._sync_keep_awake(),restart_resume=dict(enabled=self.resume_policy.enabled,max_gap_seconds=MAX_RESTART_GAP,checking=sum(runner.run['phase']=='resuming' for runner in self.runners.values()),error=self.resume_policy.error or self.resume_warning))
 
     def start(self,body):
         if self.shutdown.is_set():raise ValueError('The server is shutting down. No new setup was started.')

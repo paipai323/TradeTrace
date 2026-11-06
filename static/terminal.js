@@ -775,6 +775,25 @@
     try{receiveServerConditions(await call('terminal/keep-awake',{enabled}));}catch(error){el('keep-awake-error').textContent='Keep-awake change not confirmed: '+error.message;el('keep-awake-error').hidden=false;}finally{keepAwakeBusy=false;renderKeepAwake();}
   };
   let restartResumeState=null,restartResumeBusy=false;
+  let monitorHealth=null,monitorHealthReceived=0,monitorHealthError=false;
+  function renderMonitorHealth(){
+    const age=monitorHealthReceived?Math.max(0,(Date.now()-monitorHealthReceived)/1000):Infinity;
+    const unavailable=monitorHealthError||age>10;
+    const count=phase=>serverMonitors.filter(run=>run.phase===phase).length;
+    const observed=serverMonitors.filter(run=>['running','review','paused'].includes(run.phase));
+    const now=(monitorHealth?.checked_at||0)/1000+age;
+    const fresh=observed.filter(run=>Number.isFinite(run.last_quote_time)&&now-run.last_quote_time>=-5&&now-run.last_quote_time<=30).length;
+    const parts=[`${count('running')} monitoring`,`${count('paused')} paused`];
+    if(count('resuming'))parts.push(`${count('resuming')} checking restart`);
+    if(count('review'))parts.push(`${count('review')} awaiting review`);
+    parts.push(unavailable?'Server status unavailable · monitoring status unknown':observed.length?`Fresh quotes ${fresh}/${observed.length} setups`:'No active quote checks');
+    const message=parts.join(' · ');
+    for(const name of ['monitor-health','monitor-health-workspace']){const node=el(name);if(node.textContent!==message)node.textContent=message;node.dataset.state=unavailable||count('paused')||fresh<observed.length?'warning':'ok';}
+    const ready=el('monitor-readiness');
+    ready.textContent=unavailable?'Restart readiness unknown until server reconnects.':!restartResumeState?.enabled?'Restart resume off · saved setups require manual Start.':`Restart resume on · ${monitorHealth?.restart_candidates||0} current candidate(s). Clean shutdown within 30 seconds required; account, quotes and candle checks still apply at restart.`;
+  }
+  setInterval(renderMonitorHealth,2000);
+
   function renderRestartResume(value){if(value)restartResumeState=value;const state=restartResumeState;if(!state)return;el('restart-resume-enabled').checked=state.enabled;el('restart-resume-enabled').disabled=restartResumeBusy;el('restart-resume-status').textContent=state.error||(!state.enabled?'Automatic restart resume off · saved setups require explicit Start.':state.checking?`Checking ${state.checking} setup(s) after restart. Orders remain blocked until continuity checks pass.`:'Automatic restart resume on · clean restarts within 30 seconds only. Unsafe setups remain disarmed.');}
   el('restart-resume-enabled').onchange=async()=>{const enabled=el('restart-resume-enabled').checked;restartResumeBusy=true;el('restart-resume-enabled').disabled=true;el('restart-resume-error').hidden=true;try{receiveServerConditions(await call('terminal/restart-resume',{enabled}));}catch(error){el('restart-resume-error').textContent='Restart setting not confirmed: '+error.message;el('restart-resume-error').hidden=false;}finally{restartResumeBusy=false;renderRestartResume();}};
   function serverMonitorActive(){return !!serverMonitor&&['running','paused','resuming','review','finishing'].includes(serverMonitor.phase);}
@@ -786,6 +805,7 @@
       if(serverRegistryId&&payload.registry_id!==serverRegistryId){serverMonitors=[];monitorEstimates.clear();monitorEstimateOpen.clear();serverMonitor=null;selectedMonitorId=null;serverStateKey='';invalidate();}
       serverRegistryId=payload.registry_id;serverSnapshotRevision=payload.snapshot_revision;
     }
+    monitorHealthReceived=Date.now();monitorHealthError=false;monitorHealth=payload.health||null;
     if(payload.keep_awake)renderKeepAwake(payload.keep_awake);
     if(payload.restart_resume)renderRestartResume(payload.restart_resume);
     if(Array.isArray(payload.runs)){serverMonitors=payload.runs;const ids=new Set(serverMonitors.map(run=>run.id));for(const id of monitorEstimates.keys())if(!ids.has(id)){monitorEstimates.delete(id);monitorEstimateOpen.delete(id);}}
@@ -837,7 +857,7 @@
   async function pollServerConditions(){
     if(serverPollBusy)return;serverPollBusy=true;
     try{receiveServerConditions(await call('terminal/conditions/status',selectedMonitorId?{id:selectedMonitorId}:{}));}
-    catch(error){el('awake-chip').textContent='Awake status unknown';el('awake-chip').dataset.state='error';el('awake-chip').title='Server status unavailable; protection cannot be verified.';el('keep-awake-status').dataset.state='error';el('keep-awake-status').textContent='Server status unavailable. Keep-awake protection cannot be verified.';if(serverMonitorActive())conditionMessage('Server status unavailable. Monitoring status is unknown; verify the TradeTrace server and MT5. '+error.message);}
+    catch(error){monitorHealthError=true;renderMonitorHealth();el('awake-chip').textContent='Awake status unknown';el('awake-chip').dataset.state='error';el('awake-chip').title='Server status unavailable; protection cannot be verified.';el('keep-awake-status').dataset.state='error';el('keep-awake-status').textContent='Server status unavailable. Keep-awake protection cannot be verified.';if(serverMonitorActive())conditionMessage('Server status unavailable. Monitoring status is unknown; verify the TradeTrace server and MT5. '+error.message);}
     finally{serverPollBusy=false;}
   }
   async function stopServerConditions(reason='Stopped by user. Already submitted orders remain in MT5.'){
@@ -1560,6 +1580,7 @@
   function monitorTradeOutcome(run){const local=monitorOutcomes.get(run.id)?.value,remote=run.trade_outcome;return local&&(!remote||local.checked_at>=remote.checked_at)?local:remote;}
   function monitorPending(run){const state=monitorTradeOutcome(run)?.state;return run.result?.operation==='pending'&&[10008,10009,10010].includes(run.result.retcode)&&(!state||['pending','unknown'].includes(state));}
   function renderMonitorList(){
+    renderMonitorHealth();
     const pendingRuns=serverMonitors.filter(monitorPending);
     const active=serverMonitors.filter(r=>['running','paused','resuming','review','finishing'].includes(r.phase)),saved=serverMonitors.filter(r=>r.phase==='saved');el('monitor-count').textContent=`${active.length} active${saved.length?' · '+saved.length+' saved':''}${pendingRuns.length?' · '+pendingRuns.length+' pending':''}`;
     const attentionCount=serverMonitors.filter(r=>r.phase==='review'||r.phase==='saved'||(r.phase==='stopped'&&r.interruption?.enabled)).length;
@@ -1580,6 +1601,15 @@
       (live?liveCards:pending?pendingCards:attention?attentionCards:historyCards).push(card);
       const heading=text('div','','terminal-monitor-heading'),status=pending?(monitorTradeOutcome(run)?.state==='pending'?'Pending · waiting to fill':'Pending submitted · checking'):monitorTradeOutcome(run)?.state==='open'?'Position open':run.phase==='resuming'?'Checking restart':run.phase==='paused'?'Paused · quote gap':run.phase==='running'?'Monitoring':run.phase==='review'?'Review needed':run.phase==='finishing'?'Submitting':run.phase==='saved'?'Saved · not armed':attention?'Interrupted':run.phase;
       heading.append(text('strong',`${run.symbol} · ${run.settings.ticket.side}`),text('span',status,'terminal-monitor-badge'));card.append(heading);
+      if(run.safe_resume?.state==='resumed')card.append(text('p','Resumed after restart · progress retained.','terminal-monitor-recovered'));
+      if(run.safe_resume?.state==='blocked')card.append(text('p','Restart blocked · '+run.message,'terminal-recovery-notice'));
+      const recoveryEvents=(run.events||[]).filter(event=>/interrupt|quote pause|quote resumed|restart resum|restart.*block/i.test(event.type));
+      if(recoveryEvents.length||run.interruption){
+        const history=document.createElement('details');history.className='terminal-monitor-interruptions';history.append(text('summary','Connection & recovery history'));
+        if(run.interruption){const info=run.interruption;history.append(text('p',`Detected ${new Date(info.detected_at).toLocaleString()} · gap about ${Math.round(info.gap_seconds||0)}s. ${info.detail||''} ${info.recovered_at?'Fresh quotes returned '+new Date(info.recovered_at).toLocaleString()+'. Manual restart required.':'Setup remains stopped; review before restarting.'}`));}
+        for(const event of recoveryEvents.slice(-6).reverse())history.append(text('p',new Date(event.at).toLocaleString()+' · '+event.type+' · '+event.message));
+        card.append(history);
+      }
       card.append(text('span',monitorDisplayName(run)+(run.id===selectedMonitorId?' · Selected':''),'terminal-monitor-name'));
       if(pending){const ticket=run.settings.ticket;const recordedLevel=monitorTradeOutcome(run)?.price||run.result.requested_price;const level=recordedLevel||(run.settings.autoPlan?.entry==='RETEST'? [...(run.observations||[])].reverse().find(event=>event.structure?.direction===(ticket.side==='BUY'?1:-1))?.structure?.level:ticket['order-price']);card.append(text('p',`Order #${run.result.order} · ${ticket.side} ${run.settings.autoPlan?.entry==='RETEST'?'LIMIT':'pending'}${Number(level)>0?' at '+level:''}. Broker order remains until filled, cancelled or expired.`,'terminal-monitor-pending-info'));if(run.outcome_error)card.append(text('p','Status refresh unavailable: '+run.outcome_error,'terminal-monitor-meta'));}
       const row=run.rows[run.applied.index];

@@ -60,7 +60,7 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open .connection{marg
 body:has(#terminal-pane:not([hidden])){height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column}
 body:has(#terminal-pane:not([hidden]))>header{flex:none}
 body:has(#terminal-pane:not([hidden])) main{flex:1;min-height:0;padding:8px;display:flex;flex-direction:column;overflow:hidden}
-#terminal-pane:not([hidden]){flex:1;min-height:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) 6px var(--activity-height,170px);overflow:hidden}
+#terminal-pane:not([hidden]){flex:1;min-height:0;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr) 6px var(--activity-height,170px);overflow:hidden}
 .terminal-top{flex-wrap:nowrap}.terminal-top h2{white-space:nowrap}.terminal-actions{justify-content:flex-end}
 #terminal-status{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:6px}
 .terminal-toolbar{flex-wrap:wrap;padding:7px 10px;gap:8px}
@@ -241,3 +241,5 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 .terminal-monitor-card[data-phase=paused] .terminal-monitor-badge{background:#514322;color:#ffe2a2}.terminal-chip[data-phase=paused]{border-color:#ad8646;color:#ffe2a2}
 
 #terminal-restart-resume-status{font-size:11px;color:#b4ccdf}#terminal-restart-resume-error{color:#ffdb8b}.terminal-monitor-card[data-phase=resuming] .terminal-monitor-badge{background:#294663;color:#c2e5ff}
+
+.terminal-monitor-health{padding:9px 12px;margin:8px 0;border:1px solid #315a55;border-radius:6px;color:#a4e4d7;overflow-wrap:anywhere}.terminal-monitor-health[data-state="warning"]{border-color:#8b733c;color:#ffd58b}.terminal-monitor-recovered{color:#9be4ce}.terminal-monitor-interruptions{grid-column:1/-1;font-size:12px;overflow-wrap:anywhere}.terminal-monitor-interruptions p{margin:8px 0}
