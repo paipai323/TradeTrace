@@ -32,3 +32,12 @@ class SetupResultsTests(unittest.TestCase):
                 rows=journal.overview(account)['setup_results']
                 self.assertEqual(len(rows),1);self.assertEqual(rows[0]['net'],net)
             self.assertEqual(journal.overview('["1","Broker"]')['setup_results'][0]['net'],20)
+
+    def test_template_identity_is_reported_without_guessing_legacy_sources(self):
+        source=dict(id='uuid',name='BOS retest',kind='personal',version=3)
+        trade=dict(id='1',entry_order=11,net=20,end=1000)
+        entry=dict(position='1',result=dict(order=11),setup=dict(settings=dict(template=source)))
+        row=setup_results([trade],[entry])[0]
+        self.assertEqual(row['template'],'BOS retest · v3');self.assertEqual(row['template_key'],'personal:uuid:3')
+        entry['setup']={}
+        self.assertEqual(setup_results([trade],[entry])[0]['template'],'Unattributed')

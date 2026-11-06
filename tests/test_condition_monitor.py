@@ -43,6 +43,16 @@ class MonitorTests(unittest.TestCase):
         self.now+=seconds
         if bid is not None:self.terminal.bid=bid
         self.monitor.tick()
+    def test_template_identity_is_frozen_in_execution_snapshot(self):
+        source=dict(id='my-template',name='My BOS',kind='personal',version=2)
+        self.body['settings'].update(action='AUTO',template=source)
+        self.monitor.start(self.body);source['name']='Edited later';self.advance(101)
+        snapshot=self.terminal.prepared[0]['condition_setup']['settings']['template']
+        self.assertEqual(snapshot['name'],'My BOS');self.assertEqual(snapshot['version'],2)
+    def test_invalid_template_identity_is_rejected(self):
+        self.body['settings']['template']=dict(id='x',name='x',kind='personal',version=True)
+        with self.assertRaisesRegex(ValueError,'template identity'):self.monitor.start(self.body)
+
     def test_no_browser_required_and_completion_latches(self):
         self.monitor.start(self.body);self.advance();self.advance(101)
         self.assertEqual(self.monitor.status()['run']['phase'],'finished')

@@ -10,6 +10,7 @@
   let nextAutoConnect=0,autoReconnectBlocked=false;
   let loading=false, connecting=false, running=false, revision=0, ticketRevision=0, preview=null, submitting=false, reviewing=false, tool='cursor', pending=null, lastChartKey='', expiryTimer;
   let state={watch:[],drawings:{},alerts:[],views:{}};
+  let draftTemplateSource=null;
   let conditionDrag=null;
   let orderDrag=null,editingPosition=null,editingOrder=null,draftPriceLines=[],draftSymbol='';
   const ticketHandleNodes=new Map(),brokerHandleNodes=new Map();
@@ -648,7 +649,7 @@
     el('inferred-type').textContent=isPending&&kind?(kind==='LIMIT'?'Limit':'Stop'):'';
     el('order-hint').textContent=editingPosition?'Entry and volume are fixed. Drag or type SL / TP; × removes protection. Review to apply.':!isPending?'Drag SL / TP handles from the entry line to add protection.':!kind?'Drag the entry line or type its price.':`${el('side').value} ${kind} · GTC · Drag lines to adjust.`;
   }
-  function updateOrderKind(){ticketDraftHidden=false;saved.ticketDraftHidden=false;seedPendingEntry();updateOrderHint();invalidate();syncDraftLines();}
+  function updateOrderKind(){ticketDraftHidden=false;saved.ticketDraftHidden=false;seedPendingEntry();updateOrderHint();invalidate();syncDraftLines();if(draftTemplateSource)saveConditions();}
   for(const side of ['SELL','BUY'])document.querySelector(`[data-ticket-side="${side}"]`).onclick=()=>{if(editingOrder||editingPosition||submitting||closing)return;el('side').value=side;updateOrderKind();};
   for(const field of ['sl','tp'])el('clear-'+field).onclick=()=>{el(field).value='';updateOrderKind();};
   for(const [id,direction] of [['volume-down',-1],['volume-up',1]])el(id).onclick=()=>{if(editingOrder||editingPosition)return;const min=market?.volume_min||.01,max=market?.volume_max||100,step=market?.volume_step||.01;el('volume').value=Number(Math.max(min,Math.min(max,(Number(el('volume').value)||min)+direction*step)).toFixed(8));updateOrderKind();};
@@ -720,7 +721,7 @@
   const conditionStorage=()=>`tradetrace.conditions.v1:${scope}:${el('symbol').value}`;
   function detachConditions(message){serverStateKey='' ;if(serverMonitorActive()){conditionMessage(`${serverMonitor.symbol} · server monitoring continues. Reconnecting the display does not stop it.`);return;}conditionRun=null;if(conditionApplied?.state==='running')conditionApplied.state='stopped';if(el('condition-status'))conditionMessage(conditionFinished||message);renderConditionProgress();}
   function conditionRows(){return [...el('condition-list').children].map(row=>({id:row.dataset.conditionId,visible:row.dataset.visible!=='false',...Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,['level','low','high','sensitivity'].includes(input.dataset.field)?Number(input.value):input.value]))}));}
-  function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({rows:conditionRows(),sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),entryQuality:readEntryQuality(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
+  function saveConditions(){recordConditionUndo();try{localStorage.setItem(conditionStorage(),JSON.stringify({draftSide:el('side').value,templateSource:draftTemplateSource,rows:conditionRows(),sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),entryQuality:readEntryQuality(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,finished:conditionFinished,lastResult:conditionLastResult,applied:conditionApplied?.state==='finished'?conditionApplied:null,showLevels:el('condition-show-levels').checked,showZones:el('condition-show-zones').checked}));}catch(_){conditionMessage('Cannot save condition draft locally.');}updateConditionSummaries();primitive?.update();}
   function conditionRow(value={rule:'TRADED_ABOVE',mode:'LIVE',timeframe:'H1',level:0,low:0,high:0}){
     const row=text('div','','terminal-condition-row');row.dataset.visible=String(value.visible!==false);row.dataset.conditionId=typeof value.id==='string'&&value.id&&!([...el('condition-list').children].some(item=>item.dataset.conditionId===value.id))?value.id:crypto.randomUUID();
     const header=text('div','','terminal-condition-row-header'),summary=text('button','','terminal-condition-summary'),editor=text('div','','terminal-condition-editor');summary.type='button';summary.setAttribute('aria-expanded','true');summary.onclick=()=>selectCondition(selectedConditionRow===row?null:row);const badge=text('span','Draft','terminal-condition-progress');badge.dataset.progress='draft';badge.setAttribute('aria-label','Condition progress');const duplicate=text('button','⧉','terminal-condition-duplicate');duplicate.type='button';duplicate.title='Duplicate condition';duplicate.setAttribute('aria-label','Duplicate condition');duplicate.onclick=event=>{event.stopPropagation();duplicateCondition(row);};header.append(summary,badge,duplicate);row.append(header,editor);
@@ -747,7 +748,7 @@
     selectedConditionRow=null;conditionPick=null;
     el('condition-show-levels').checked=value.showLevels!==false;el('condition-show-zones').checked=value.showZones!==false;
     el('condition-list').replaceChildren();el('condition-action').value='ALERT';
-    el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(value.autoPlan);setInvalidation(value.invalidation);setEntryQuality(value.entryQuality);setMonitorSettings(value.monitoring);
+    el('condition-sizing').value=value.sizing==='AUTO'?'AUTO':'MANUAL';setAutoPlan(value.autoPlan);setInvalidation(value.invalidation);setEntryQuality(value.entryQuality);setMonitorSettings(value.monitoring);draftTemplateSource=value.templateSource||null;if(['BUY','SELL'].includes(value.draftSide))el('side').value=value.draftSide;
     for(const name of ['timeout','gap'])el('condition-'+name).value=Number.isFinite(Number(value[name]))&&Number(value[name])>=0?value[name]:(name==='gap'?300:0);
     if(Array.isArray(value.rows))for(const row of value.rows)if(row&&typeof row==='object')conditionRow(row);
     resetConditionUndo();renderConditionValidation();if(conditionEvents.length)logConditionEvent('Restored','Saved draft restored. Monitoring was not resumed.');
@@ -1078,7 +1079,7 @@
   }
   function clearSetupDraft(){
     if(conditionBusy||submitting||reviewing||closing){conditionMessage('Wait for the current broker request to finish before creating a new draft.');return;}
-    finishConditionDrag(true);conditionPick=null;
+    finishConditionDrag(true);conditionPick=null;draftTemplateSource=null;
     if(conditionFinished)conditionLastResult=conditionFinished;
     conditionFinished='';conditionRun=null;conditionApplied=null;selectedConditionRow=null;el('condition-list').replaceChildren();
     el('condition-action').value='ALERT';setAutoPlan();setInvalidation();setEntryQuality();setMonitorSettings();el('condition-start').textContent='Start conditions';
@@ -1169,7 +1170,7 @@
   }
 
   let conditionUndoStack=[],conditionHistoryBaseline=null,conditionHistoryGroup=null,conditionHistorySuspended=false;
-  const conditionDraftSnapshot=()=>({rows:structuredClone(conditionRows()),selectedId:selectedConditionRow?.dataset.conditionId||null});
+  const conditionDraftSnapshot=()=>({templateSource:structuredClone(draftTemplateSource),rows:structuredClone(conditionRows()),selectedId:selectedConditionRow?.dataset.conditionId||null});
   function renderConditionUndo(){
     const button=el('condition-undo');button.disabled=!conditionUndoStack.length;
     button.title=conditionUndoStack.length?`Undo: ${conditionUndoStack.at(-1).label}. Draft only; running setup is unchanged.`:'No condition draft changes to undo.';
@@ -1207,7 +1208,7 @@
     conditionPick=null;conditionHistoryGroup=null;
     const previous=conditionUndoStack.pop();conditionHistorySuspended=true;
     try{
-      selectedConditionRow=null;el('condition-list').replaceChildren();
+      draftTemplateSource=previous.templateSource||null;selectedConditionRow=null;el('condition-list').replaceChildren();
       for(const row of previous.rows)conditionRow(row);
       selectCondition([...el('condition-list').children].find(row=>row.dataset.conditionId===previous.selectedId)||el('condition-list').firstElementChild||null);
       saveConditions();
@@ -1224,7 +1225,7 @@
 
   let conditionComparisonKey='';
   function conditionComparisonSettings(){
-    return {action:el('condition-action').value,sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),entryQuality:readEntryQuality(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,ticket:Object.fromEntries(['side','order-kind','order-price','volume','sl','tp'].map(name=>[name,el(name).value]))};
+    return {template:draftTemplateSource?structuredClone(draftTemplateSource):null,action:el('condition-action').value,sizing:el('condition-sizing').value,autoPlan:readAutoPlan(),invalidation:readInvalidation(),entryQuality:readEntryQuality(),monitoring:readMonitorSettings(),timeout:el('condition-timeout').value,gap:el('condition-gap').value,ticket:Object.fromEntries(['side','order-kind','order-price','volume','sl','tp'].map(name=>[name,el(name).value]))};
   }
   function comparisonPrice(value){const n=Number(value);return Number.isFinite(n)&&n>0?n.toLocaleString('en-US',{maximumFractionDigits:8}):'Not set';}
   function comparisonSettings(settings){
@@ -1296,8 +1297,9 @@
       const settings=conditionComparisonSettings();if(entryQualityErrors(settings.entryQuality,rows).length)throw Error(entryQualityErrors(settings.entryQuality,rows)[0]);if(autoPlanErrors(settings.autoPlan).length)throw Error(autoPlanErrors(settings.autoPlan)[0]);if(invalidationErrors(settings.invalidation||{enabled:false}).length)throw Error(invalidationErrors(settings.invalidation)[0]);if(![settings.timeout,settings.gap].every(value=>value!==''&&Number.isFinite(Number(value))&&Number(value)>=0))throw Error('Fix the timing settings before saving.');
       const prices=rows.filter(row=>!C.structure(row.rule)).flatMap(row=>C.zone(row.rule)?[row.low,row.high]:[row.level]);if(settings.invalidation?.enabled&&settings.invalidation.source==='LEVEL')prices.push(settings.invalidation.level);const anchor=prices.length?(Math.min(...prices)+Math.max(...prices))/2:(market?.bid||0);
       const previous=conditionTemplates.find(item=>item.name.toLowerCase()===name.toLowerCase());if(!previous&&conditionTemplates.length>=30)throw Error('The template library is full (30 templates). Remove one before saving another.');
-      const template={id:previous?.id||crypto.randomUUID(),name,symbol:el('symbol').value,rows:structuredClone(rows),settings:structuredClone(settings),anchor,updated:Date.now()};
+      const template={id:previous?.id||crypto.randomUUID(),name,symbol:el('symbol').value,rows:structuredClone(rows),settings:structuredClone(settings),anchor,version:(previous?.version||1)+(previous?1:0),updated:Date.now()};
       persistConditionTemplates([...conditionTemplates.filter(item=>item.id!==template.id),template].sort((a,b)=>a.name.localeCompare(b.name)),template.id);
+      draftTemplateSource={id:template.id,name:template.name,kind:'personal',version:template.version};saveConditions();
       logConditionEvent('Template saved',`${name} saved locally. Running setup was not changed.`);templateMessage(`Saved “${name}”. Loads as an inactive, alert-only draft.`);
     }catch(error){templateMessage(error.message);}
   };
@@ -1327,6 +1329,7 @@
         for(const [field,saved] of [['order-price','order-price'],['sl','sl'],['tp','tp']])el(field).value=price(ticket[saved])||'';
         for(const row of rows)conditionRow(row);
       });
+      draftTemplateSource={id:template.id||'starter:'+template.key,name:template.name,kind:template.id?'personal':'starter',version:template.version||1};saveConditions();
       updateOrderHint();invalidate();syncDraftLines();selectSetupTab('conditions');
       conditionMessage(`Draft loaded from “${template.name}”. Monitoring stopped; automatic entry off. Review conditions and Order before Start.`);
       logConditionEvent('Template loaded',`${template.name} loaded as an inactive alert-only draft with ${reposition?'repositioned':'saved'} prices.`);
@@ -1364,6 +1367,16 @@
   }
   renderConditionTemplates();
 
+  for(const button of el('starter-shortcuts').querySelectorAll('button'))button.onclick=()=>{const direction=el('starter-side').value;el('condition-starter').value=button.dataset.starter==='RETEST'?`BOS_${direction}_RETEST`:`${button.dataset.starter}_${direction}`;renderStarter();};
+  function openPersonalTemplates(save=false){openSetupBuilder('conditions');el('builder-templates').open=true;el('condition-templates').open=true;if(save){el('condition-template-name').focus();}else el('condition-template-select').focus();el('condition-templates').scrollIntoView({block:'nearest'});}
+  el('my-templates').onclick=()=>openPersonalTemplates();el('save-template-shortcut').onclick=()=>openPersonalTemplates(true);
+  function shortDraftStory(){
+    const rows=conditionRows(),action=el('condition-action').value,plan=readAutoPlan(),side=el('side').value==='BUY'?'buy':'sell';
+    const steps=rows.slice(0,3).map(row=>C.structure(row.rule)?`${row.timeframe} ${row.rule.endsWith('_UP')?'bullish':'bearish'} ${row.rule.startsWith('BOS')?'BOS':'MS'} candle close`:comparisonCondition(row));
+    const wait=steps.length?'Wait for '+steps.join(', then ')+(rows.length>3?`, then ${rows.length-3} more condition(s)`:''):'No conditions: Start acts immediately';
+    const entry=plan.enabled?(plan.entry==='RETEST'?`a ${side} limit at the broken structure level`:plan.entry==='CONFIRM'?`a ${side} market order after a retest and rejection close`:`a ${side} market order`):`${side} ${el('order-kind').value==='PENDING'?'pending order at '+(el('order-price').value||'an unset price'):'market order'}`;
+    return wait+'. '+(action==='ALERT'?'Then alert only; order entry is off.':action==='REVIEW'?`Then prepare ${entry} for your confirmation.`:`Then attempt ${entry} once.`)+(action!=='ALERT'&&plan.enabled?` Risk ${plan.risk}% equity; target ${plan.rr}R.`:'');
+  }
   function starterSettings(){
     const key=el('condition-starter').value,retest=key.endsWith('_RETEST'),rule=retest?key.slice(0,-7):key;
     return {key,rule,retest,side:rule.endsWith('_UP')?'BUY':'SELL',timeframe:el('condition-starter-frame').value,risk:Number(el('condition-starter-risk').value)};
@@ -1380,7 +1393,7 @@
     if(!Number.isFinite(preset.risk)||preset.risk<.01||preset.risk>2||!C.frames.includes(preset.timeframe))return;
     if(!C.structure(preset.rule)){el('condition-starter-status').textContent='Choose a valid starter setup.';return;}
     const name=el('condition-starter').selectedOptions[0].textContent;
-    const template={name,symbol:el('symbol').value,anchor:market?.bid||0,
+    const template={name,key:preset.key,version:1,symbol:el('symbol').value,anchor:market?.bid||0,
       rows:[{rule:preset.rule,mode:'CANDLE',timeframe:preset.timeframe,sensitivity:2,level:0,low:0,high:0,visible:true}],
       settings:{action:'ALERT',sizing:'MANUAL',timeout:'0',gap:'300',invalidation:{enabled:true,source:'SWING',direction:preset.side==='BUY'?'BELOW':'ABOVE',level:0,timeframe:preset.timeframe,sensitivity:2,buffer:10,visible:true},
         autoPlan:{enabled:true,entry:preset.retest?'RETEST':'MARKET',stop_basis:'SIGNAL',hold_breakout:!preset.retest,timeframe:preset.timeframe,sensitivity:2,buffer:10,rr:2,risk:preset.risk,expiry:30},
@@ -1599,9 +1612,9 @@
     const measure=items=>{const known=items.filter(row=>Number.isFinite(row.net)),rs=items.filter(row=>Number.isFinite(row.r_multiple));return [items.length,known.filter(row=>row.net>0).length,known.filter(row=>row.net<0).length,known.filter(row=>row.net===0).length,known.length?(known.filter(row=>row.net>0).length/known.length*100).toFixed(1)+'%':'—',known.length?known.reduce((sum,row)=>sum+row.net,0).toFixed(2)+' '+currency:'—',rs.length?(rs.reduce((sum,row)=>sum+row.r_multiple,0)/rs.length).toFixed(2)+'R':'—',`${rs.length}/${items.length}`];};
     const table=(titles,values)=>{const wrap=text('div','','terminal-results-table'),table=document.createElement('table'),head=document.createElement('thead'),tr=document.createElement('tr');for(const title of titles)tr.append(text('th',title));head.append(tr);table.append(head);const body=document.createElement('tbody');for(const valuesRow of values){const row=document.createElement('tr');for(const value of valuesRow){const td=document.createElement('td');if(value instanceof Node)td.append(value);else td.textContent=String(value);row.append(td);}body.append(row);}table.append(body);wrap.append(table);return wrap;};
     const groups=new Map(),by=el('results-group').value;
-    for(const row of rows){const key=row[by]||'Unknown';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+    for(const row of rows){const key=by==='template'?row.template_key||'Unattributed':row[by]||'Unknown';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
     const host=el('results-groups');host.replaceChildren();
-    if(rows.length)host.append(table(['Group','Trades','Wins','Losses','Flat','Win rate','Net P/L','Avg R','R sample'],[['All linked trades',...measure(rows)],...[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([key,items])=>[key,...measure(items)])]));
+    if(rows.length)host.append(table(['Group','Trades','Wins','Losses','Flat','Win rate','Net P/L','Avg R','R sample'],[['All linked trades',...measure(rows)],...[...groups].sort(([a],[b])=>a.localeCompare(b)).map(([key,items])=>[by==='template'?items[0].template||'Unattributed':key,...measure(items)])]));
     else host.append(text('p','No linked closed setup trades in this journal account yet. Trades appear after closure and journal sync.'));
     const trades=el('results-trades');trades.replaceChildren();
     const waiting=current.map(run=>({run,state:monitorPending(run)?'Pending':monitorTradeOutcome(run)?.state==='open'?'Open':run.phase==='skipped'?'Skipped':null})).filter(item=>item.state);
@@ -1730,7 +1743,7 @@
       invalidate();selectedMonitorId=id;serverMonitor=null;serverStateKey='';serverDetachedId='';serverReviewShown='';conditionFinished='';conditionApplied=null;
       const settings=run.settings,ticket=settings.ticket;conditionHistorySuspended=true;el('condition-list').replaceChildren();
       for(const row of run.rows)conditionRow(row);
-      setAutoPlan(settings.autoPlan);setEntryQuality(settings.entryQuality);setInvalidation(settings.invalidation);setMonitorSettings({name:run.name,group:run.group,group_policy:run.group_policy});
+      draftTemplateSource=settings.template||null;setAutoPlan(settings.autoPlan);setEntryQuality(settings.entryQuality);setInvalidation(settings.invalidation);setMonitorSettings({name:run.name,group:run.group,group_policy:run.group_policy});
       for(const name of ['sizing','timeout','gap','action'])el('condition-'+name).value=settings[name];syncConditionStartLabel();
       for(const name of ['side','order-kind','order-price','volume','sl','tp'])el(name).value=ticket[name]??'';
       conditionHistorySuspended=false;resetConditionUndo();saveConditions();updateOrderHint();syncDraftLines();selectSetupTab('conditions');
@@ -1882,12 +1895,13 @@
     const sidebar=el('builder-draft-summary');if(!sidebar)return;
     const rows=conditionRows(),plan=readAutoPlan(),side=el('side').value,name=readMonitorSettings().name||'Unnamed draft';
     const setText=(node,value)=>{if(node.textContent!==value)node.textContent=value;};
+    setText(el('draft-story'),shortDraftStory());setText(el('draft-template'),draftTemplateSource?`Based on ${draftTemplateSource.name} · v${draftTemplateSource.version}. Draft edits may differ.`:'Custom draft · no template source.');
     setText(sidebar,`${name} · ${rows.length} condition${rows.length===1?'':'s'} · ${side} · ${plan.enabled?plan.risk+'% risk':'ticket lots'}`);
     const dialog=el('setup-builder');if(!dialog.open&&!preparing)return;
     renderExposure();
     dialog.classList.toggle('builder-use-auto',plan.enabled);if(plan.enabled&&!dialog.classList.contains('builder-advanced')&&!el('auto-plan').open)el('auto-plan').open=true;
     setText(el('builder-context'),`${el('symbol').value||'Select a market'} · ${market?(market.demo?'Demo':'LIVE')+' account '+market.account:'Connect MT5'} · ${name}`);
-    setText(el('builder-story'),el('condition-preview-text').textContent||'Add conditions or load a starter template. An empty setup acts immediately when explicitly started.');
+    setText(el('builder-story'),shortDraftStory());
     const facts=[['Execution',{ALERT:'Alerts only',REVIEW:'Prepare order for review',AUTO:'One automatic entry attempt'}[el('condition-action').value]],['Entry',plan.enabled?(plan.entry==='RETEST'?'Limit retest · expires in '+plan.expiry+' minutes':plan.entry==='CONFIRM'?'Retest + rejection close → market':'Market after confirmation'):side+' '+(el('order-kind').value==='MARKET'?'market':'pending at '+el('order-price').value)],['Risk & target',plan.enabled?`${plan.risk}% equity · ${plan.rr}R target · ${plan.timeframe} swing stop (${plan.sensitivity} candles, ${plan.buffer} ticks)${plan.stop_basis==='SIGNAL'?' · beyond signal candle':''}${plan.hold_breakout&&plan.entry!=='RETEST'?' · breakout must hold':''}`:`${el('volume').value||'—'} lots · SL ${el('sl').value||'not set'} · TP ${el('tp').value||'not set'}`],['Cancellation',invalidationDescription(readInvalidation())],['Entry quality',qualityDescription(readEntryQuality())],['Linked setups',readMonitorSettings().group?readMonitorSettings().group+' · '+(readMonitorSettings().group_policy==='FIRST_ENTRY'?'first entry stops others':'all may enter'):'Independent'],['Timing',`Timeout ${el('condition-timeout').value||0} min · quote-gap reset ${el('condition-gap').value||0} sec`]];
     const factsNode=el('builder-facts'),factsKey=JSON.stringify(facts);if(factsNode.dataset.key!==factsKey){factsNode.dataset.key=factsKey;factsNode.replaceChildren(...facts.flatMap(([label,value])=>[text('dt',label),text('dd',value)]));}
   }

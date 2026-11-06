@@ -69,6 +69,9 @@ class ConditionRun:
             if self.requests[request_id]!=fingerprint:raise ValueError('Start request already used with different settings.')
             # A retried old start must never replace or re-arm any current run.
             return self.status()
+        source=settings.get('template')
+        if source is not None:
+            if not isinstance(source,dict) or set(source)!={'id','name','kind','version'} or source.get('kind') not in ('starter','personal') or any(not isinstance(source.get(key),str) or not 1<=len(source[key])<=100 for key in ('id','name')) or type(source.get('version')) is not int or not 1<=source['version']<=1000000:raise ValueError('Invalid template identity.')
         action=settings.get('action');ticket=settings.get('ticket') or {};plan=settings.get('autoPlan') or {'enabled':False}
         if action not in ('ALERT','REVIEW','AUTO') or settings.get('sizing') not in ('MANUAL','AUTO'):raise ValueError('Choose a valid execution mode and sizing.')
         if not isinstance(ticket,dict) or ticket.get('side') not in ('BUY','SELL') or ticket.get('order-kind') not in ('MARKET','PENDING'):raise ValueError('Choose a valid order ticket.')

@@ -22,10 +22,12 @@ def setup_results(trades, entries):
         if not trade.get('entry_order') or str(trade['entry_order'])!=str(result.get('order')):continue
         seen.add(pid)
         families=sorted({'BOS' if row.get('rule','').startswith('BOS') else 'MS' for row in setup.get('rows',[]) if row.get('rule','').startswith(('BOS','MS'))})
+        source=(setup.get('settings') or {}).get('template') or {}
+        source_label=(source.get('name','')+' · v'+str(source.get('version',1))) if source.get('id') else 'Unattributed'
         net=trade.get('net');risk=(setup.get('automatic_plan') or {}).get('modeled_loss')
         valid_net=isinstance(net,(int,float)) and not isinstance(net,bool) and math.isfinite(net)
         valid_r=valid_net and isinstance(risk,(int,float)) and not isinstance(risk,bool) and math.isfinite(risk) and risk>0
-        results.append(dict(position=pid,monitor_id=setup.get('monitor_id'),name=setup.get('name') or 'Unnamed setup',symbol=trade.get('symbol',''),side=trade.get('side',''),end=trade.get('end'),net=net if valid_net else None,r_multiple=net/risk if valid_r else None,family=' + '.join(families) or 'Other'))
+        results.append(dict(template=source_label,template_key=(str(source.get('kind'))+':'+str(source.get('id'))+':'+str(source.get('version'))) if source.get('id') else None,template_id=source.get('id'),template_kind=source.get('kind'),position=pid,monitor_id=setup.get('monitor_id'),name=setup.get('name') or 'Unnamed setup',symbol=trade.get('symbol',''),side=trade.get('side',''),end=trade.get('end'),net=net if valid_net else None,r_multiple=net/risk if valid_r else None,family=' + '.join(families) or 'Other'))
     return sorted(results,key=lambda row:row['end'] or 0,reverse=True)
 
 

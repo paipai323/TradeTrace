@@ -247,3 +247,5 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 .terminal-results-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:14px 0}.terminal-results-controls label{display:grid;gap:6px;font-size:12px}#terminal-results-summary>span{display:inline-block;margin:8px 18px 8px 0}.terminal-results-table{overflow:auto;margin:14px 0}.terminal-results-table table{width:100%;border-collapse:collapse;font-size:12px}.terminal-results-table th,.terminal-results-table td{text-align:left;padding:10px;border-bottom:1px solid #30445a;white-space:nowrap}
 
 .terminal-monitor-workspace.is-results .terminal-awake-controls{display:none}
+
+.terminal-draft-story{font-size:12px;line-height:1.6;color:#c5e3df;margin:10px 0}#terminal-starter-shortcuts{grid-column:1/-1}#terminal-condition-templates{margin-top:14px;padding:12px;border:1px solid #30445a;border-radius:7px}
