@@ -10,6 +10,7 @@
   let nextAutoConnect=0,autoReconnectBlocked=false;
   let loading=false, connecting=false, running=false, revision=0, ticketRevision=0, preview=null, submitting=false, reviewing=false, tool='cursor', pending=null, lastChartKey='', expiryTimer;
   let state={watch:[],drawings:{},alerts:[],views:{}};
+  let chartReviewId='',chartReviewLines=[],chartReviewLineKey='',chartReviewFit=false,chartReviewOpening=false;
   let draftTemplateSource=null;
   let conditionDrag=null;
   let orderDrag=null,editingPosition=null,editingOrder=null,draftPriceLines=[],draftSymbol='';
@@ -465,7 +466,7 @@
     ctx.restore();
   }
   function buildChart(){
-    const range=visibleDrawingRange();chart?.remove();priceLines=[];selectedPriceLines=[];draftPriceLines=[];overlays={};
+    const range=visibleDrawingRange();chart?.remove();chartReviewLines=[];chartReviewLineKey='';priceLines=[];selectedPriceLines=[];draftPriceLines=[];overlays={};
     chart=L.createChart(el('chart'),{autoSize:true,layout:{background:{type:L.ColorType.Solid,color:'#0d1420'},textColor:'#8e9eb4',fontFamily:'Segoe UI, Arial',fontSize:11,attributionLogo:true,panes:{separatorColor:'#263143',separatorHoverColor:'#415671',enableResize:true}},grid:{vertLines:{color:'#192335'},horzLines:{color:'#192335'}},rightPriceScale:{borderColor:'#29364b',minimumWidth:74},timeScale:{borderColor:'#29364b',timeVisible:true,secondsVisible:el('timeframe').value.startsWith('S'),rightOffset:24,barSpacing:7},crosshair:{mode:L.CrosshairMode.Normal},localization:{locale:'en-US'}});
     const priceFormat={type:'price',precision:market?.digits??5,minMove:market?.tick_size||10**-(market?.digits??5)};
     main=chart.addSeries(el('style').value==='line'?L.LineSeries:L.CandlestickSeries,el('style').value==='line'?{color:'#78a7ff',lineWidth:2,priceFormat}:{upColor:'#43c9a0',downColor:'#ef7385',wickUpColor:'#43c9a0',wickDownColor:'#ef7385',borderVisible:false,priceFormat});
@@ -533,10 +534,10 @@
     for(const order of market.orders||[])if(order.symbol===el('symbol').value){const selected=matched&&order.ticket===focus.order;priceLine(order.price,'#e4bd70',`${selected?'Selected · ':''}Pending #${order.ticket}`,selected);priceLine(order.sl,'#ef7385',`#${order.ticket} SL`,selected);priceLine(order.tp,'#43c9a0',`#${order.ticket} TP`,selected);}
     if(first){if(visible&&visible.from<visible.to)restoreDrawingRange(visible);else chart.timeScale().setVisibleLogicalRange({from:Math.max(0,bars.length-110),to:bars.length+24});}
     else if(range)restoreDrawingRange(range);
-    lastChartKey=workspaceKey();updateOrderHint();syncDraftLines();updateSelectionPrices();primitive.update();el('chart-empty').hidden=true;
+    lastChartKey=workspaceKey();renderChartReview();updateOrderHint();syncDraftLines();updateSelectionPrices();primitive.update();el('chart-empty').hidden=true;
   }
   function setTool(value){finishConditionDrag(true);conditionPick=null;finishDrawingDrag(true);selectDrawing(-1);tool=value;pending=null;document.querySelectorAll('[data-drawing]').forEach(b=>{b.classList.toggle('selected',b.dataset.drawing===value);b.setAttribute('aria-pressed',String(b.dataset.drawing===value));});chart?.applyOptions({handleScroll:value==='cursor',handleScale:{axisPressedMouseMove:true,mouseWheel:value==='cursor',pinch:value==='cursor'}});el('chart').style.cursor=value==='cursor'?'crosshair':'copy';el('tool-hint').textContent=value==='cursor'?'Scroll to zoom · click drawings to select · drag empty space to pan':value==='level'?'Click anywhere in the price pane to place a level':isPosition({type:value})?'Click to place entry · drag entry, target, stop or width handles':'Click two anchors · Escape cancels';primitive?.update();}
-  function clearMarket(){finishConditionDrag(true);conditionPick=null;detachConditions('Stopped: connection or chart selection changed.');finishOrderDrag(true);if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;queueTicketEstimate();bars=[];renderTicketHandles(chart.paneSize(0));renderBrokerHandles(chart.paneSize(0));lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
+  function clearMarket(){clearChartReviewLines();finishConditionDrag(true);conditionPick=null;detachConditions('Stopped: connection or chart selection changed.');finishOrderDrag(true);if(draftSymbol&&draftSymbol!==el('symbol').value){endOrderEdit();for(const field of ['order-price','sl','tp'])el(field).value='';}draftSymbol=el('symbol').value;if(!closing)cancelClose();market=null;queueTicketEstimate();bars=[];renderTicketHandles(chart.paneSize(0));renderBrokerHandles(chart.paneSize(0));lastChartKey='';invalidate();pending=null;main?.setData([]);for(const series of Object.values(overlays))series.setData([]);for(const line of priceLines)main.removePriceLine(line);priceLines=[];el('chart-empty').hidden=false;el('chart-empty').replaceChildren(text('span','Loading broker candles…'));el('ohlc').textContent='';el('bid').textContent='BID —';el('ask').textContent='ASK —';el('positions').replaceChildren();}
   function selectionChanged(){revision++;clearMarket();setTool('cursor');persist();renderWatchlist();refresh();}
   function chooseSymbol(symbol){if(!symbols.includes(symbol))return;el('symbol').value=symbol;el('search').value='';el('search-results').hidden=true;selectionChanged();}
   function renderWatchlist(){
@@ -1544,9 +1545,9 @@
   async function loadMonitorEstimate(id){
     if(monitorEstimateBusy)return;const run=serverMonitors.find(run=>run.id===id);if(!run||run.scope!==scope||run.phase!=='running')return;
     monitorEstimateBusy=id;for(const detail of el('monitor-list').querySelectorAll('[data-estimate-id]')){const item=serverMonitors.find(run=>run.id===detail.dataset.estimateId);if(item)fillMonitorEstimate(detail,item);}
-    try{const result=await call('terminal/conditions/estimate',{id});if(!result.estimate)throw Error('Server did not return an estimate. Restart TradeTrace to load the updated server.');monitorEstimates.set(id,{value:result.estimate,received:Date.now()});}
-    catch(error){monitorEstimates.set(id,{value:{status:'unavailable',at:Date.now(),reason:error.message},received:Date.now()});}
-    finally{monitorEstimateBusy='';for(const detail of el('monitor-list').querySelectorAll('[data-estimate-id]')){const item=serverMonitors.find(run=>run.id===detail.dataset.estimateId);if(item)fillMonitorEstimate(detail,item);}}
+    try{const result=await call('terminal/conditions/estimate',{id});if(!result.estimate)throw Error('Server did not return an estimate. Restart TradeTrace to load the updated server.');monitorEstimates.set(id,{value:result.estimate,received:Date.now(),index:run.applied.index,phase:run.phase});}
+    catch(error){monitorEstimates.set(id,{value:{status:'unavailable',at:Date.now(),reason:error.message},received:Date.now(),index:run.applied.index,phase:run.phase});}
+    finally{monitorEstimateBusy='';renderChartReview();for(const detail of el('monitor-list').querySelectorAll('[data-estimate-id]')){const item=serverMonitors.find(run=>run.id===detail.dataset.estimateId);if(item)fillMonitorEstimate(detail,item);}}
   }
   function recoveryDescription(run){
     const info=run.interruption;if(!info)return '';const stamp=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString()+' local':'unavailable';
@@ -1626,7 +1627,7 @@
   function monitorTradeOutcome(run){const local=monitorOutcomes.get(run.id)?.value,remote=run.trade_outcome;return local&&(!remote||local.checked_at>=remote.checked_at)?local:remote;}
   function monitorPending(run){const state=monitorTradeOutcome(run)?.state;return run.result?.operation==='pending'&&[10008,10009,10010].includes(run.result.retcode)&&(!state||['pending','unknown'].includes(state));}
   function renderMonitorList(){
-    renderMonitorHealth();
+    renderMonitorHealth();renderChartReview();
     el('monitor-workspace').classList.toggle('is-results',monitorFilter==='results');
     el('monitor-results').hidden=monitorFilter!=='results';el('monitor-list').hidden=monitorFilter==='results';
     if(monitorFilter==='results')renderSetupResults();
@@ -1649,7 +1650,7 @@
       const pending=monitorPending(run);
       (live?liveCards:pending?pendingCards:attention?attentionCards:historyCards).push(card);
       const heading=text('div','','terminal-monitor-heading'),status=pending?(monitorTradeOutcome(run)?.state==='pending'?'Pending · waiting to fill':'Pending submitted · checking'):monitorTradeOutcome(run)?.state==='open'?'Position open':run.phase==='resuming'?'Checking restart':run.phase==='paused'?'Paused · quote gap':run.phase==='running'?'Monitoring':run.phase==='review'?'Review needed':run.phase==='finishing'?'Submitting':run.phase==='saved'?'Saved · not armed':attention?'Interrupted':run.phase;
-      heading.append(text('strong',`${run.symbol} · ${run.settings.ticket.side}`),text('span',status,'terminal-monitor-badge'));card.append(heading);
+      const inspect=text('button',`${run.symbol} · ${run.settings.ticket.side}`,'terminal-monitor-inspect');inspect.type='button';inspect.title='Review this setup on the chart';inspect.setAttribute('aria-label','Review '+monitorDisplayName(run)+' on chart');inspect.disabled=run.scope!==scope;inspect.onclick=()=>reviewSetupOnChart(run.id);heading.append(inspect,text('span',status,'terminal-monitor-badge'));card.append(heading);
       if(run.safe_resume?.state==='resumed')card.append(text('p','Resumed after restart · progress retained.','terminal-monitor-recovered'));
       if(run.safe_resume?.state==='blocked')card.append(text('p','Restart blocked · '+run.message,'terminal-recovery-notice'));
       const recoveryEvents=(run.events||[]).filter(event=>/interrupt|quote pause|quote resumed|restart resum|restart.*block/i.test(event.type));
@@ -1679,7 +1680,7 @@
         restart.onclick=()=>reviewInterruptedSetup(run.id);recovery.append(check,restart);card.append(recovery);
       }
       actions.className='terminal-monitor-row-actions';
-      const view=text('button','View on chart');view.type='button';view.disabled=open.disabled;view.onclick=async()=>{await openMonitoredSetup(run.id,false);if(selectedMonitorId===run.id){hideMonitorWorkspace();}};
+      const view=text('button','View on chart');view.type='button';view.disabled=open.disabled;view.onclick=()=>reviewSetupOnChart(run.id);
       open.title='Edit draft. Running settings change only after explicit Start.';
       const duplicate=text('button','Duplicate draft');duplicate.type='button';duplicate.disabled=open.disabled;duplicate.onclick=()=>duplicateMonitoredSetup(run.id);
       actions.append(open,stop,view,duplicate);
@@ -1733,6 +1734,55 @@
     else if(!liveCards.length&&!pendingCards.length&&['all','active'].includes(monitorFilter))sections.unshift(text('p','Nothing is actively monitoring.','terminal-monitor-empty'));
     el('monitor-list').replaceChildren(...sections);updateMonitorEstimateAges();
   }
+
+  function clearChartReviewLines(){if(main)for(const line of chartReviewLines)main.removePriceLine(line);chartReviewLines=[];chartReviewLineKey='';}
+  function closeChartReview(){chartReviewId='';chartReviewFit=false;clearChartReviewLines();if(main)main.applyOptions({autoscaleInfoProvider:base=>base()});el('chart-review').hidden=true;}
+  async function reviewSetupOnChart(id){
+    if(chartReviewOpening||conditionBusy||submitting||reviewing||closing)return;
+    const run=serverMonitors.find(run=>run.id===id);if(!run||run.scope!==scope)return;
+    chartReviewOpening=true;
+    try{
+      if(el('symbol').value!==run.symbol){el('symbol').value=run.symbol;selectionChanged();const until=Date.now()+10000;while(!market&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,100));}
+      if(!market||run.scope!==scope||el('symbol').value!==run.symbol)throw Error('Chart unavailable or account changed. Try again.');
+      closeChartReview();chartReviewId=id;chartReviewFit=false;hideMonitorWorkspace();renderChartReview();
+      if(run.phase==='running')await loadMonitorEstimate(id);
+    }catch(error){status('Chart review: '+error.message);}
+    finally{chartReviewOpening=false;}
+  }
+  function renderChartReview(){
+    if(!chartReviewId)return;
+    const run=serverMonitors.find(run=>run.id===chartReviewId);
+    if(!run||run.scope!==scope||run.symbol!==el('symbol').value){closeChartReview();return;}
+    const panel=el('chart-review');panel.hidden=!market;if(!market){clearChartReviewLines();return;}
+    el('chart-review-title').textContent=monitorDisplayName(run)+' · '+run.phase;
+    const step=run.rows[run.applied.index],levels=[];
+    const add=(name,price,color)=>{if(Number.isFinite(Number(price))&&Number(price)>0)levels.push({name,price:Number(price),color});};
+    if(step){if(C.structure(step.rule))add((run.phase==='running'?'Tracking trigger · may move · ':'Last trigger · ')+step.timeframe,run.structureState?.level,'#b5a3ff');else if(C.zone(step.rule)){add('Zone low',step.low,'#b5a3ff');add('Zone high',step.high,'#b5a3ff');}else add('Trigger',step.level,'#b5a3ff');}
+    if(run.retest_confirmation)add('Confirmed retest level',run.retest_confirmation.level,'#b5a3ff');
+    if(run.invalidation?.enabled)add(run.phase==='saved'?'Previous cancellation':'Frozen cancellation',run.invalidation.level,'#ff8795');
+    const cached=monitorEstimates.get(run.id),estimate=cached?.value,age=cached?Math.max(0,(Date.now()-cached.received)/1000):Infinity;
+    const current=!monitorHealthError&&Date.now()-monitorHealthReceived<=10000&&run.phase==='running'&&cached?.index===run.applied.index&&cached?.phase===run.phase&&age<=15;
+    let note='Read-only applied setup. Estimates are recalculated at execution; no order is placed by this view.';
+    const outcome=monitorTradeOutcome(run),broker=(market.orders||[]).find(order=>run.result?.order&&String(order.ticket)===String(run.result.order))||(outcome?.state==='open'?(market.positions||[]).find(position=>String(position.ticket)===String(outcome.position)):null);
+    if(broker){add('Broker entry',broker.price??broker.price_open,'#e4bd70');add('Broker SL',broker.sl,'#ff8795');add('Broker TP',broker.tp,'#70e4c2');note='Read-only broker snapshot for this setup. Refresh its trade outcome to confirm current linkage. No order changed.';}
+    else if(run.phase==='review'&&run.review?.request){const request=run.review.request;for(const [name,key,color] of [['Prepared entry','price','#e4bd70'],['Prepared SL','sl','#ff8795'],['Prepared TP','tp','#70e4c2']])add(name,request[key],color);note+=' Prepared review expires; inspect Order before confirming.';}
+    else if(current&&estimate){for(const [name,key,color] of [['Estimated entry','entry','#e4bd70'],['Estimated SL','sl','#ff8795'],['Estimated TP','tp','#70e4c2']])add(name,estimate[key],color);note+=' '+(estimate.reason||'')+(Number.isFinite(estimate.rr)?` RR 1:${estimate.rr.toFixed(2)}.`:'')+' As of '+new Date(cached.received).toLocaleTimeString()+'.';}
+    else note+=' '+(run.phase==='running'?(age>15&&cached?'Estimate is old; refresh to show projected prices.':'Refresh for an entry estimate.'): 'No active entry estimate in this state.');
+    if(current&&estimate?.status==='unavailable')note+=' Future entry levels may not be known yet.';
+    el('chart-review-waiting').textContent=run.phase==='running'?(run.retest_confirmation?.message||C.waitingDescription(step,run.structureState,{digits:market?.digits})):run.message;
+    const levelKey=JSON.stringify(levels),node=el('chart-review-levels');
+    if(node.dataset.key!==levelKey){node.dataset.key=levelKey;node.replaceChildren(...levels.map(level=>{const item=text('span',`${level.name}: ${level.price.toFixed(market?.digits??5)}`);item.dataset.reviewLevel=level.name;item.style.color=level.color;return item;}));}
+    el('chart-review-note').textContent=note;
+    el('chart-review-refresh').disabled=run.phase!=='running'||!!monitorEstimateBusy;
+    el('chart-review-fit').disabled=!levels.length;
+    if(main&&market&&chartReviewLineKey!==levelKey){clearChartReviewLines();chartReviewLineKey=levelKey;for(const level of levels)chartReviewLines.push(main.createPriceLine({price:level.price,title:'Review · '+level.name,color:level.color,lineStyle:L.LineStyle.Dotted,lineWidth:2,axisLabelVisible:true}));}
+    if(chartReviewFit&&main){main.applyOptions({autoscaleInfoProvider:base=>{const info=base();if(!info?.priceRange||!levels.length)return info;return {...info,priceRange:{minValue:Math.min(info.priceRange.minValue,...levels.map(level=>level.price)),maxValue:Math.max(info.priceRange.maxValue,...levels.map(level=>level.price))}};}});}
+  }
+  el('chart-review-close').onclick=closeChartReview;
+  el('chart-review-refresh').onclick=()=>loadMonitorEstimate(chartReviewId);
+  el('chart-review-fit').onclick=()=>{chartReviewFit=true;renderChartReview();main?.priceScale().applyOptions({autoScale:true});};
+  el('chart-review-edit').onclick=async()=>{const id=chartReviewId;closeChartReview();await openMonitoredSetup(id);};
+  setInterval(()=>{if(chartReviewId)renderChartReview();},2000);
   async function openMonitoredSetup(id,showBuilder=true){
     let run=serverMonitors.find(r=>r.id===id);if(!run||run.scope!==scope||conditionBusy||submitting||reviewing||closing)return;
     hideMonitorWorkspace();conditionBusy=true;updateTicket();

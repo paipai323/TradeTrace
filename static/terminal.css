@@ -249,3 +249,7 @@ body:has(#terminal-pane:not([hidden])).terminal-connection-open main>#status{dis
 .terminal-monitor-workspace.is-results .terminal-awake-controls{display:none}
 
 .terminal-draft-story{font-size:12px;line-height:1.6;color:#c5e3df;margin:10px 0}#terminal-starter-shortcuts{grid-column:1/-1}#terminal-condition-templates{margin-top:14px;padding:12px;border:1px solid #30445a;border-radius:7px}
+
+.terminal-chart-review{flex:0 0 auto;padding:10px 12px;border-bottom:1px solid #38566a;background:#142332;max-height:230px;overflow:auto}.terminal-chart-review p{font-size:12px;line-height:1.5;margin:6px 0}.terminal-chart-review .terminal-panel-title>div{display:flex;gap:5px;flex-wrap:wrap}#terminal-chart-review-levels{display:flex;gap:8px 18px;flex-wrap:wrap;font-size:12px}.terminal-monitor-inspect{background:transparent!important;border:0!important;padding:0!important;text-align:left;font-weight:700;color:inherit;cursor:pointer}.terminal-monitor-inspect:hover{text-decoration:underline}@media(max-width:550px){.terminal-chart-review{max-height:200px}.terminal-chart-review .terminal-panel-title{display:block}}
+
+@media(max-width:550px){.terminal-center:has(#terminal-chart-review:not([hidden])){overflow-y:auto;overscroll-behavior:contain}.terminal-center:has(#terminal-chart-review:not([hidden]))>.terminal-chart-area{flex:0 0 260px!important;min-height:260px!important}.terminal-center:has(#terminal-chart-review:not([hidden]))>.terminal-chart-heading,.terminal-center:has(#terminal-chart-review:not([hidden]))>.terminal-drawing-tools{flex-shrink:0}}

@@ -47,10 +47,11 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  await page.locator('#terminal-monitor-workspace-open').click();
  assert.equal(await page.locator('#terminal-monitor-workspace').evaluate(e=>e.classList.contains('is-expanded')),true);
  await page.locator('#terminal-monitor-workspace').screenshot({path:path.join(root,'work/monitor-workspace-desktop.png')});
+ const unchangedDraftName=await page.locator('#terminal-monitor-name').inputValue();
  await page.locator(`[data-monitor-id="${a}"]`).getByRole('button',{name:'View on chart',exact:true}).click();
  assert.equal(await page.locator('#terminal-setup-builder').evaluate(e=>e.open),false,'view chart does not open builder');
  assert.equal(await page.locator('#terminal-monitor-workspace').isHidden(),true);
- assert.equal(await page.locator('#terminal-monitor-name').inputValue(),'Buy breakout');
+ assert.equal(await page.locator('#terminal-monitor-name').inputValue(),unchangedDraftName,'quick review preserves the editable draft');assert.match(await page.locator('#terminal-chart-review-title').textContent(),/Buy breakout/);
  await page.locator('#terminal-monitor-workspace-open').click();
  await page.locator('#terminal-monitor-workspace-close').click();
  assert.equal(await page.locator('#terminal-monitor-workspace').isHidden(),true,'corner Close hides workspace');
@@ -86,7 +87,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  assert.equal(await page.locator('#terminal-monitor-list>.terminal-monitor-symbol-group>.terminal-monitor-card').count(),2,'both current reviews stay outside history');
  assert.equal(await page.locator('#terminal-monitor-list').evaluate(e=>getComputedStyle(e).maxHeight),'none','no tiny nested scrolling list');
  await page.locator('#terminal-monitor-workspace-open').click();
- await page.locator(`[data-monitor-id="${e}"] button`).first().click();
+ await page.locator(`[data-monitor-id="${e}"]`).getByRole('button',{name:'Open review',exact:true}).click();
  await page.waitForFunction(()=>!document.querySelector('#terminal-submit').hidden);assert.match(await page.locator('#terminal-order-summary').textContent(),/CONDITIONS COMPLETE/);
  await post('terminal/conditions/stop',{id:e});state=(await post('test/feed')).state;
  assert.equal(state.runs.find(r=>r.id===f).phase,'review','stopping one keeps the other review alive');
@@ -113,7 +114,7 @@ const server=spawn(process.env.TRADETRACE_TEST_PYTHON||path.join(root,'.venv/Scr
  assert.equal(afterCopy.state.runs.find(r=>r.id===h).phase,'running','original keeps monitoring');
  await page.locator('#terminal-builder-close').click();
  await page.locator('#terminal-monitor-workspace-open').click();
- await page.locator(`[data-monitor-id="${g}"] button`).first().click();await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('GBPUSD'));
+ await page.locator(`[data-monitor-id="${g}"]`).getByRole('button',{name:'Open setup',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#terminal-chart-title').textContent.includes('GBPUSD'));
  assert.equal(await page.locator('#terminal-monitor-name').inputValue(),'GBP monitor');
  await page.locator('#terminal-condition-action').selectOption('REVIEW');assert.equal((await post('test/feed')).state.runs.find(r=>r.id===g).phase,'running','draft action edits do not stop a frozen run');
  await page.locator('#terminal-condition-action').selectOption('ALERT');await page.locator('.terminal-condition-row [data-field=level]').fill('1.3');await page.locator('#terminal-condition-start').click();
